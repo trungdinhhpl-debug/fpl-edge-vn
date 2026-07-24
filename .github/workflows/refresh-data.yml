@@ -38,10 +38,12 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Đồng bộ FPL -> Neon
+      - name: Đồng bộ FPL (+ kèo nhà cái) -> Neon
         working-directory: backend
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          # tuỳ chọn: có key thì dùng đồng thuận nhà cái, không có thì dùng mô hình nội bộ
+          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
           AUTO_SYNC_ON_STARTUP: "false"
           PROJECTION_HORIZON: "8"
           MONTECARLO_ITERATIONS: "5000"

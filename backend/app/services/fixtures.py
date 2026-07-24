@@ -4,8 +4,9 @@ from __future__ import annotations
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.engine.fixture_difficulty import rate_fixture
-from app.engine.team_strength import TeamStrength
+from app.engine.team_strength import TeamStrength, load_market_map
 from app.models import Fixture, Player, Team
 from app.services.common import gw_fixture_count_by_team, planning_start_gw, team_lookup
 
@@ -14,7 +15,11 @@ def _build_ts(db: Session) -> TeamStrength:
     teams = db.scalars(select(Team)).all()
     players = db.scalars(select(Player)).all()
     finished = db.scalars(select(Fixture).where(Fixture.finished.is_(True))).all()
-    return TeamStrength(teams, players, finished)
+    return TeamStrength(
+        teams, players, finished,
+        market=load_market_map(db),
+        market_weight=settings.odds_market_weight,
+    )
 
 
 def fixture_ticker(db: Session, start_gw: int | None = None, n_gws: int = 8) -> dict:
@@ -34,8 +39,9 @@ def fixture_ticker(db: Session, start_gw: int | None = None, n_gws: int = 8) -> 
             continue
         rh = rate_fixture(ts, f.team_h, f.team_a, f.event, True)
         ra = rate_fixture(ts, f.team_a, f.team_h, f.event, False)
-        grid[f.team_h][f.event].append(_cell(rh, teams.get(f.team_a), True))
-        grid[f.team_a][f.event].append(_cell(ra, teams.get(f.team_h), False))
+        mk = ts.has_market(f.team_h, f.team_a, True)
+        grid[f.team_h][f.event].append(_cell(rh, teams.get(f.team_a), True, mk))
+        grid[f.team_a][f.event].append(_cell(ra, teams.get(f.team_h), False, mk))
 
     rows = []
     for tid, team in teams.items():
@@ -68,10 +74,12 @@ def fixture_ticker(db: Session, start_gw: int | None = None, n_gws: int = 8) -> 
     }
 
 
-def _cell(rating, opp: Team | None, is_home: bool) -> dict:
+def _cell(rating, opp: Team | None, is_home: bool, has_market: bool = False) -> dict:
     return {
         "opponent": opp.short_name if opp else "?",
         "is_home": is_home,
+        # True = số liệu dựa trên kèo nhà cái; False = ước lượng từ mô hình nội bộ
+        "has_market": has_market,
         "attack_difficulty": rating.attack_difficulty,
         "defence_difficulty": rating.defence_difficulty,
         "clean_sheet_prob": rating.clean_sheet_prob,

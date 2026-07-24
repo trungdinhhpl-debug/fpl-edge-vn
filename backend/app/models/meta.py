@@ -95,6 +95,33 @@ class SourceFetchLog(Base):
     )
 
 
+# --------------------------------------------------- market odds (Tier-2) -----
+class MarketOdds(Base):
+    """Bookmaker-implied expected goals per fixture (spec §3 Tier-2).
+
+    Written by ingestion so request-time code never calls the odds API
+    (protects the monthly quota). `is_market=False` would mean a model estimate.
+    """
+    __tablename__ = "market_odds"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    fixture_id: Mapped[int] = mapped_column(Integer, unique=True, index=True)
+    gameweek: Mapped[int | None] = mapped_column(Integer, index=True, nullable=True)
+    team_h: Mapped[int] = mapped_column(Integer)
+    team_a: Mapped[int] = mapped_column(Integer)
+    lam_home: Mapped[float] = mapped_column(Float)
+    lam_away: Mapped[float] = mapped_column(Float)
+    p_home: Mapped[float] = mapped_column(Float, default=0.0)
+    p_draw: Mapped[float] = mapped_column(Float, default=0.0)
+    p_away: Mapped[float] = mapped_column(Float, default=0.0)
+    total_goals: Mapped[float] = mapped_column(Float, default=0.0)
+    n_bookmakers: Mapped[int] = mapped_column(Integer, default=0)
+    source_name: Mapped[str] = mapped_column(String(32), default="odds_api")
+    is_market: Mapped[bool] = mapped_column(Boolean, default=True)
+    fetched_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
 # --------------------------------------------------------------- users --------
 class UserProfile(Base):
     __tablename__ = "user_profiles"

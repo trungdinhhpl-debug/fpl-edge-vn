@@ -27,6 +27,19 @@ def _clamp(v: float, lo: float = 0.55, hi: float = 1.7) -> float:
     return max(lo, min(hi, v))
 
 
+def load_market_map(db) -> dict[tuple[int, int], tuple[float, float]]:
+    """(home_team_id, away_team_id) -> (lam_home, lam_away) from stored odds.
+
+    Read from the DB, never from the odds API, so page loads cost no quota.
+    """
+    from sqlalchemy import select
+
+    from app.models import MarketOdds
+
+    rows = db.scalars(select(MarketOdds)).all()
+    return {(r.team_h, r.team_a): (r.lam_home, r.lam_away) for r in rows}
+
+
 @dataclass
 class TeamRates:
     team_id: int
@@ -41,9 +54,25 @@ class TeamRates:
 
 
 class TeamStrength:
-    def __init__(self, teams: list, players: list, finished_fixtures: list) -> None:
+    def __init__(
+        self,
+        teams: list,
+        players: list,
+        finished_fixtures: list,
+        market: dict[tuple[int, int], tuple[float, float]] | None = None,
+        market_weight: float = 0.7,
+    ) -> None:
+        """`market` maps (home_team_id, away_team_id) -> (lam_home, lam_away)
+        from bookmaker prices. Where present it is blended over the internal
+        model (spec §3: licensed market data outranks a model estimate)."""
         self._rates: dict[int, TeamRates] = {}
+        self._market = market or {}
+        self._market_weight = market_weight
         self._build(teams, players, finished_fixtures)
+
+    def has_market(self, team_id: int, opp_id: int, is_home: bool) -> bool:
+        key = (team_id, opp_id) if is_home else (opp_id, team_id)
+        return key in self._market
 
     # ---------------------------------------------------------------- build ---
     def _build(self, teams, players, finished_fixtures) -> None:
@@ -148,6 +177,15 @@ class TeamStrength:
         w = t.matches / (t.matches + SHRINK_K)
         lam_for = w * t.emp_xg_per_game * (venue_for) + (1 - w) * prior_for
         lam_against = w * t.emp_xga_per_game * (venue_against) + (1 - w) * prior_against
+
+        # bookmaker consensus for this exact fixture, if we have it
+        key = (team_id, opp_id) if is_home else (opp_id, team_id)
+        mk = self._market.get(key)
+        if mk:
+            mk_for, mk_against = (mk[0], mk[1]) if is_home else (mk[1], mk[0])
+            w = self._market_weight
+            lam_for = w * mk_for + (1 - w) * lam_for
+            lam_against = w * mk_against + (1 - w) * lam_against
 
         return (
             min(max(lam_for, MIN_LAMBDA), MAX_LAMBDA),

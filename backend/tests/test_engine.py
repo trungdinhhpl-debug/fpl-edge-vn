@@ -75,3 +75,51 @@ def test_preseason_nailed_player_still_high():
     )
     assert est.p_start > 0.85
     assert est.xmins > 70
+
+
+# ---------------------------------------------------------- market odds ------
+def test_odds_inversion_recovers_lambdas():
+    """1X2 + totals -> expected goals must round-trip back to the same market."""
+    from app.providers.probability import _outcome_probs, _p_over, _solve_supremacy, _solve_total
+
+    lam_h, lam_a = 2.1, 0.9
+    ph, _, _ = _outcome_probs(lam_h, lam_a)
+    total = _solve_total(_p_over(lam_h + lam_a, 2.5), 2.5)
+    sup = _solve_supremacy(ph, total)
+    assert abs(total - (lam_h + lam_a)) < 0.05
+    assert abs((total + sup) / 2 - lam_h) < 0.1
+    assert abs((total - sup) / 2 - lam_a) < 0.1
+
+
+def test_odds_team_name_matching():
+    from app.providers.probability import match_team_id
+
+    fpl = {1: "Arsenal", 11: "Man Utd", 13: "Nott'm Forest", 17: "Spurs", 9: "Hull City"}
+    assert match_team_id("Arsenal", fpl) == 1
+    assert match_team_id("Manchester United", fpl) == 11
+    assert match_team_id("Nottingham Forest", fpl) == 13
+    assert match_team_id("Tottenham Hotspur", fpl) == 17
+    assert match_team_id("Hull City", fpl) == 9
+    assert match_team_id("Real Madrid", fpl) is None
+
+
+def test_market_odds_override_model():
+    """Where bookmaker data exists it must move the projection toward the market."""
+    from app.engine.team_strength import TeamStrength
+
+    class T:
+        def __init__(self, i):
+            self.id = i
+            self.strength = 1200
+            self.strength_attack_home = self.strength_attack_away = 1200
+            self.strength_defence_home = self.strength_defence_away = 1200
+
+    teams = [T(1), T(2)]
+    base = TeamStrength(teams, [], [])
+    with_mkt = TeamStrength(teams, [], [], market={(1, 2): (3.0, 0.4)}, market_weight=0.7)
+    b_for, _ = base.expected_goals(1, 2, True)
+    m_for, m_against = with_mkt.expected_goals(1, 2, True)
+    assert m_for > b_for            # market says home team scores a lot
+    assert m_against < 1.0
+    assert with_mkt.has_market(1, 2, True)
+    assert not with_mkt.has_market(2, 1, True)

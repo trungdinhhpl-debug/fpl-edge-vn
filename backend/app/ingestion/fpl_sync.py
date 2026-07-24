@@ -251,6 +251,64 @@ def seed_experts(db: Session) -> dict:
     return {"sources": len(name_to_source)}
 
 
+# ----------------------------------------------------------- market odds ------
+def sync_odds(db: Session) -> dict:
+    """Fetch bookmaker odds -> per-fixture expected goals (spec §3 Tier-2).
+
+    Odds are only published for the near-term fixtures, so this typically covers
+    the next gameweek; later gameweeks keep using the internal model.
+    """
+    from app.models import MarketOdds
+    from app.providers.probability import get_probability_provider, match_team_id
+
+    provider = get_probability_provider()
+    if provider is None:
+        _log(db, "Odds provider", "internal", "ok", 0,
+             "Chưa cấu hình ODDS_API_KEY — dùng mô hình nội bộ (model estimate).",
+             "market")
+        db.commit()
+        return {"matched": 0, "skipped": 0, "enabled": False}
+
+    try:
+        matches = provider.get_matches()
+    except Exception as exc:
+        _log(db, "Odds provider", ODDS_URL, "error", 0, str(exc)[:300], "market")
+        db.commit()
+        return {"matched": 0, "skipped": 0, "enabled": True, "error": str(exc)[:200]}
+
+    teams = {t.id: t.name for t in db.scalars(select(Team)).all()}
+    fixtures = db.scalars(select(Fixture).where(Fixture.finished.is_(False))).all()
+    by_pair: dict[tuple[int, int], Fixture] = {}
+    for f in fixtures:
+        by_pair.setdefault((f.team_h, f.team_a), f)
+
+    matched = skipped = 0
+    for m in matches:
+        hid = match_team_id(m.home_name, teams)
+        aid = match_team_id(m.away_name, teams)
+        fx = by_pair.get((hid, aid)) if hid and aid else None
+        if not fx:
+            skipped += 1
+            continue
+        db.merge(MarketOdds(
+            fixture_id=fx.id, gameweek=fx.event, team_h=hid, team_a=aid,
+            lam_home=m.lam_home, lam_away=m.lam_away,
+            p_home=m.p_home, p_draw=m.p_draw, p_away=m.p_away,
+            total_goals=m.total_goals, n_bookmakers=m.n_bookmakers,
+            source_name=m.source, is_market=m.is_market,
+            fetched_at=datetime.now(timezone.utc),
+        ))
+        matched += 1
+
+    _log(db, "The Odds API (soccer_epl)", ODDS_URL, "ok" if matched else "error",
+         matched, f"{matched} trận khớp, {skipped} bỏ qua", "market")
+    db.commit()
+    return {"matched": matched, "skipped": skipped, "enabled": True}
+
+
+ODDS_URL = "https://the-odds-api.com/"
+
+
 # ----------------------------------------------------------------- full sync --
 def run_full_sync(db: Session, build_proj: bool = True, detail: bool = False) -> dict:
     result: dict = {"started_at": datetime.now(timezone.utc).isoformat()}
@@ -258,6 +316,7 @@ def run_full_sync(db: Session, build_proj: bool = True, detail: bool = False) ->
         result["bootstrap"] = sync_bootstrap(db, client)
         result["fixtures"] = sync_fixtures(db, client)
     result["experts"] = seed_experts(db)
+    result["odds"] = sync_odds(db)
     if build_proj:
         from app.engine.projections import build_projections
         result["projections"] = build_projections(db)

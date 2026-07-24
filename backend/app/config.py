@@ -45,6 +45,8 @@ class Settings(BaseSettings):
 
     # The Odds API (optional) — probability provider. Empty => internal model fallback.
     odds_api_key: str = ""
+    # how far to trust bookmaker consensus over the internal model, 0..1
+    odds_market_weight: float = 0.7
 
     # Understat (optional, Phase 2). Empty => rely on FPL's own xG/xA.
     understat_enabled: bool = False

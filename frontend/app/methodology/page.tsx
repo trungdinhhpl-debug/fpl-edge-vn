@@ -46,6 +46,31 @@ export default function MethodologyPage() {
         </Card>
 
         <Card>
+          <CardHeader><CardTitle>Kèo nhà cái (Tier-2)</CardTitle></CardHeader>
+          <CardContent className="space-y-2 text-sm text-muted-foreground">
+            <p>
+              Với những vòng đã có kèo, hệ thống lấy đồng thuận của ~20 nhà cái (The Odds API)
+              và <b>giải ngược ra số bàn kỳ vọng</b> mỗi đội:
+            </p>
+            <code className="block rounded bg-muted p-2 text-xs text-foreground">
+              Tài/xỉu → tổng bàn T · Kèo 1X2 → chênh lệch S · λ_nhà=(T+S)/2, λ_khách=(T−S)/2
+            </code>
+            <p>
+              Giá đã khử biên lợi nhuận (de-vig) và lấy trung bình nhiều nhà cái, sau đó
+              pha với mô hình nội bộ theo trọng số {data?.market_odds?.market_weight ?? 0.7} cho thị trường.
+            </p>
+            <p>
+              Vòng <b>chưa có kèo</b> dùng mô hình nội bộ và được gắn nhãn “model estimate” —
+              không bao giờ trình bày số của mô hình như giá thị trường thật.
+              {data?.market_odds?.fixtures_covered ? (
+                <> Hiện có kèo cho <b>{data.market_odds.fixtures_covered} trận</b>
+                  {data.market_odds.gameweeks?.length ? ` (GW ${data.market_odds.gameweeks.join(", ")})` : ""}.</>
+              ) : null}
+            </p>
+          </CardContent>
+        </Card>
+
+        <Card>
           <CardHeader><CardTitle>Monte Carlo & rủi ro</CardTitle></CardHeader>
           <CardContent className="space-y-2 text-sm text-muted-foreground">
             <p>Mô phỏng ở cấp <b>trận đấu của đội</b> để giữ tương quan: sạch lưới dùng chung cho GK + hậu vệ; bàn thắng của cầu thủ rút từ tổng bàn của đội (không giả định độc lập).</p>

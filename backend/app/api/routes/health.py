@@ -30,13 +30,33 @@ def health() -> dict:
 
 @router.get("/model/health")
 def model_health(db: Session = Depends(get_db)) -> dict:
+    from app.models import MarketOdds
+
     n_players = db.scalar(select(func.count()).select_from(Player)) or 0
     n_proj = db.scalar(select(func.count()).select_from(PlayerProjection)) or 0
     latest = db.scalar(select(func.max(PlayerProjection.data_cutoff)))
+
+    n_odds = db.scalar(select(func.count()).select_from(MarketOdds)) or 0
+    odds_gws = sorted({
+        gw for (gw,) in db.execute(select(MarketOdds.gameweek).distinct()).all() if gw
+    })
+    odds_at = db.scalar(select(func.max(MarketOdds.fetched_at)))
+
     return {
         "model_version": settings.model_version,
         "players": n_players,
         "projections": n_proj,
+        "market_odds": {
+            "enabled": bool(settings.odds_api_key),
+            "fixtures_covered": n_odds,
+            "gameweeks": odds_gws,
+            "market_weight": settings.odds_market_weight,
+            "last_fetched": odds_at.isoformat() if odds_at else None,
+            "note": (
+                "Vòng có kèo dùng đồng thuận nhà cái; vòng không có dùng mô hình "
+                "nội bộ (model estimate)."
+            ),
+        },
         "montecarlo_iterations": settings.montecarlo_iterations,
         "projection_horizon": settings.projection_horizon,
         "last_projection_cutoff": latest.isoformat() if latest else None,

@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.engine import risk as risk_mod
 from app.engine.montecarlo import MCPlayer, simulate_fixture, summarise
-from app.engine.team_strength import TeamStrength
+from app.engine.team_strength import TeamStrength, load_market_map
 from app.engine.xmins import estimate_minutes
 from app.engine.xpoints import _poisson_ge_k, expected_points
 from app.models import (
@@ -69,7 +69,12 @@ def build_projections(
     fixtures = db.scalars(select(Fixture)).all()
     finished = [f for f in fixtures if f.finished]
 
-    ts = TeamStrength(teams, players, finished)
+    market = load_market_map(db)
+    ts = TeamStrength(
+        teams, players, finished,
+        market=market,
+        market_weight=settings.odds_market_weight,
+    )
 
     # matches played per team
     matches_played: dict[int, int] = defaultdict(int)

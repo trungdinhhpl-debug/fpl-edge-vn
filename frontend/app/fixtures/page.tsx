@@ -114,11 +114,22 @@ export default function FixturesPage() {
                               cells.map((c: any, i: number) => (
                                 <div
                                   key={i}
-                                  className={`rounded px-1 py-0.5 text-[11px] font-medium ${fdrClass(c[key])}`}
-                                  title={`${c.opponent} (${c.is_home ? "H" : "A"}) · ghi ${fmt(c.proj_goals_for)} / thủng ${fmt(c.proj_goals_against)}`}
+                                  className={`relative rounded px-1 py-0.5 text-[11px] font-medium ${fdrClass(c[key])}`}
+                                  title={
+                                    `${c.opponent} (${c.is_home ? "H" : "A"}) · ghi ${fmt(c.proj_goals_for)} / thủng ${fmt(c.proj_goals_against)}` +
+                                    (c.has_market ? " · nguồn: kèo nhà cái" : " · nguồn: mô hình nội bộ")
+                                  }
                                 >
-                                  {c.opponent}{c.is_home ? "" : ""}
+                                  {c.opponent}
                                   <span className="opacity-70">{c.is_home ? " (H)" : " (A)"}</span>
+                                  {c.has_market && (
+                                    <span
+                                      aria-hidden
+                                      className="absolute right-0.5 top-0 text-[9px] leading-none opacity-80"
+                                    >
+                                      •
+                                    </span>
+                                  )}
                                 </div>
                               ))
                             )}
@@ -167,6 +178,10 @@ export default function FixturesPage() {
         {[1, 2, 3, 4, 5].map((n) => (
           <span key={n} className={`rounded px-2 py-0.5 ${fdrClass(n)}`}>{n === 1 ? "Rất dễ" : n === 5 ? "Rất khó" : n}</span>
         ))}
+        <span className="ml-2 flex items-center gap-1">
+          <span className="rounded bg-muted px-1.5 py-0.5 font-semibold">•</span>
+          = có kèo nhà cái (chính xác hơn); ô không có dấu là ước lượng từ mô hình
+        </span>
       </div>
     </div>
   );
