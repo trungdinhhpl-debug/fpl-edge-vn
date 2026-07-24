@@ -1,0 +1,32 @@
+# ---- secrets ----
+.env
+*/.env
+!.env.example
+!*/.env.example
+frontend/.env.local
+
+# ---- python ----
+.venv/
+__pycache__/
+*.pyc
+*.db
+*.sqlite3
+.pytest_cache/
+.ruff_cache/
+
+# ---- node / next ----
+node_modules/
+.next/
+out/
+npm-debug.log*
+yarn-error.log*
+
+# ---- misc ----
+.DS_Store
+*.log
+.idea/
+.vscode/
+_realtest.db
+
+# generated static reports (regenerate with: python -m app.cli report)
+reports/

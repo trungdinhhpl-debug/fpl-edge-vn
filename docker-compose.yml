@@ -1,0 +1,50 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: fpl
+      POSTGRES_PASSWORD: fpl
+      POSTGRES_DB: fpl_edge
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fpl"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  backend:
+    build: ./backend
+    environment:
+      DATABASE_URL: postgresql+psycopg://fpl:fpl@db:5432/fpl_edge
+      REDIS_URL: redis://redis:6379/0
+      AUTO_SYNC_ON_STARTUP: "true"
+      ENABLE_SCHEDULER: "true"
+      CORS_ORIGINS: http://localhost:3000
+      PROJECTION_HORIZON: "8"
+      MONTECARLO_ITERATIONS: "10000"
+      ODDS_API_KEY: ${ODDS_API_KEY:-}
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+
+  frontend:
+    build: ./frontend
+    environment:
+      BACKEND_URL: http://backend:8000
+    depends_on:
+      - backend
+    ports:
+      - "3000:3000"
+
+volumes:
+  pgdata:
