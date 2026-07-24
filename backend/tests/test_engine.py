@@ -55,3 +55,23 @@ def test_defender_gets_clean_sheet_and_defcon_ev():
     assert bd.clean_sheet > 0        # good CS fixture
     assert bd.defcon > 0             # high defensive-contribution rate
     assert bd.negative <= 0
+
+
+def test_preseason_fringe_player_not_nailed():
+    """Pre-season (0 current games): a 2-start/135-min player must NOT read as
+    a nailed 83' starter (regression for the matches_played=0 bug)."""
+    est = estimate_minutes(
+        element_type=2, status="a", chance_of_playing=None,
+        season_starts=2, season_minutes=135, team_matches_played=0,
+    )
+    assert est.p_start < 0.2
+    assert est.xmins < 25
+
+
+def test_preseason_nailed_player_still_high():
+    est = estimate_minutes(
+        element_type=2, status="a", chance_of_playing=None,
+        season_starts=36, season_minutes=3200, team_matches_played=0,
+    )
+    assert est.p_start > 0.85
+    assert est.xmins > 70

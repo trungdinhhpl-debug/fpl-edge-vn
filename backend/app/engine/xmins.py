@@ -56,17 +56,22 @@ def estimate_minutes(
     recent_minutes: list[int] | None = None,
     n_fixtures_this_gw: int = 1,
 ) -> MinutesEstimate:
-    team_matches_played = max(team_matches_played, 1)
     avail_mult, avail_reason = _availability_multiplier(status, chance_of_playing)
 
+    # Reference number of games for rate calculations. In pre-season no current
+    # fixtures are finished yet the cumulative FPL stats reflect the PRIOR full
+    # season, so divide by ~38 — otherwise a player with 2 starts / 135 mins gets
+    # treated as a nailed starter. Once the season is under way, use games played.
+    games_ref = 38 if team_matches_played <= 0 else team_matches_played
+
     # season start & appearance rates
-    start_rate = min(season_starts / team_matches_played, 1.0)
+    start_rate = min(season_starts / games_ref, 1.0)
     appearances = 0
     if recent_minutes:
         appearances = sum(1 for m in recent_minutes if m > 0)
     # crude appearance count if we lack per-GW data
     est_appearances = max(appearances, round(season_minutes / 75.0)) or 1
-    appear_rate = min(est_appearances / team_matches_played, 1.0)
+    appear_rate = min(est_appearances / games_ref, 1.0)
 
     # recent-form start signal (weight recent games higher)
     if recent_minutes:
