@@ -23,6 +23,10 @@ MIN_LAMBDA = 0.15
 MAX_LAMBDA = 4.5
 
 
+def _clamp(v: float, lo: float = 0.55, hi: float = 1.7) -> float:
+    return max(lo, min(hi, v))
+
+
 @dataclass
 class TeamRates:
     team_id: int
@@ -75,6 +79,19 @@ class TeamStrength:
         for p in players:
             team_xg[p.team_id] = team_xg.get(p.team_id, 0.0) + (p.expected_goals or 0.0)
 
+        # team xGA proxy = the highest per-player expected_goals_conceded on the
+        # team (a full-season nailed player ≈ team's season xGA). Used to derive a
+        # DEFENCE index when FPL's strength ratings are absent (pre-season = all 0).
+        team_xga_proxy: dict[int, float] = {t.id: 0.0 for t in teams}
+        for p in players:
+            team_xga_proxy[p.team_id] = max(
+                team_xga_proxy.get(p.team_id, 0.0), p.expected_goals_conceded or 0.0
+            )
+        _xg_vals = [v for v in team_xg.values() if v > 0]
+        _xga_vals = [v for v in team_xga_proxy.values() if v > 0]
+        mean_team_xg = sum(_xg_vals) / len(_xg_vals) if _xg_vals else 1.0
+        mean_team_xga = sum(_xga_vals) / len(_xga_vals) if _xga_vals else 1.0
+
         for t in teams:
             mp = max(matches.get(t.id, 0), 0)
             emp_xg = (team_xg.get(t.id, 0.0) / mp) if mp else LEAGUE_AVG_GOALS
@@ -83,12 +100,20 @@ class TeamStrength:
             emp_ga = (goals_against.get(t.id, 0) / mp) if mp else LEAGUE_AVG_GOALS
             emp_attack = 0.5 * emp_xg + 0.5 * emp_gf if mp else LEAGUE_AVG_GOALS
 
+            # fallback indices from last-season player xG/xGA when FPL ratings
+            # aren't set yet (pre-season). Attack: higher = stronger. Defence:
+            # higher = concedes fewer = stronger (matches how expected_goals uses it).
+            derived_att = _clamp(team_xg.get(t.id, 0.0) / mean_team_xg) if mean_team_xg else 1.0
+            _xga = team_xga_proxy.get(t.id, 0.0)
+            derived_def = _clamp(mean_team_xga / _xga) if _xga else 1.0
+            has_fpl = bool(t.strength_attack_home)
+
             self._rates[t.id] = TeamRates(
                 team_id=t.id,
-                attack_home=(t.strength_attack_home or m_att_h) / m_att_h,
-                attack_away=(t.strength_attack_away or m_att_a) / m_att_a,
-                defence_home=(t.strength_defence_home or m_def_h) / m_def_h,
-                defence_away=(t.strength_defence_away or m_def_a) / m_def_a,
+                attack_home=(t.strength_attack_home / m_att_h) if has_fpl else derived_att,
+                attack_away=(t.strength_attack_away / m_att_a) if has_fpl else derived_att,
+                defence_home=(t.strength_defence_home / m_def_h) if has_fpl else derived_def,
+                defence_away=(t.strength_defence_away / m_def_a) if has_fpl else derived_def,
                 emp_xg_per_game=emp_attack,
                 emp_xga_per_game=emp_ga,
                 matches=mp,
