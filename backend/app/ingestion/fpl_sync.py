@@ -129,6 +129,11 @@ def sync_bootstrap(db: Session, client: FPLClient) -> dict:
         ))
         n_players += 1
 
+    # ensure teams/players are actually inserted before rows that FK to them.
+    # (Postgres enforces FKs immediately; SQLAlchemy only orders by relationship,
+    #  and player_prices/injury_reports have FK columns but no relationship.)
+    db.flush()
+
     # price snapshots + injury reports (only for flagged players)
     for e in data.get("elements", []):
         db.add(PlayerPrice(
