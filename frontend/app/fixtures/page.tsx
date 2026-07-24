@@ -1,15 +1,57 @@
 "use client";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useApi } from "@/lib/api";
 import { useT } from "@/lib/i18n";
 import { Card, CardContent, Spinner, ErrorBox, Button } from "@/components/ui";
+import { SortControl, type SortDir } from "@/components/sort-control";
 import { fdrClass } from "@/lib/utils";
 import { fmt } from "@/lib/format";
+
+type SortKey = "difficulty" | "goals" | "cs" | "team";
+
+const SORT_OPTIONS: { key: SortKey; label: string }[] = [
+  { key: "difficulty", label: "Độ khó trung bình" },
+  { key: "goals", label: "Σ bàn kỳ vọng" },
+  { key: "cs", label: "Σ sạch lưới kỳ vọng" },
+  { key: "team", label: "Tên đội" },
+];
 
 export default function FixturesPage() {
   const { t } = useT();
   const [mode, setMode] = useState<"attack" | "defence">("attack");
+  const [sort, setSort] = useState<SortKey>("difficulty");
+  // độ khó: thấp = lịch dễ, nên mặc định xếp tăng dần (dễ nhất lên đầu)
+  const [dir, setDir] = useState<SortDir>("asc");
   const { data, loading, error } = useApi<any>("/api/fixtures/ticker?n_gws=8");
+
+  // hooks phải chạy trước mọi return sớm
+  const rows = useMemo(() => {
+    const list = [...((data?.rows ?? []) as any[])];
+    const sign = dir === "asc" ? 1 : -1;
+    const get = (r: any) => {
+      switch (sort) {
+        case "goals":
+          return r.sum_proj_goals ?? 0;
+        case "cs":
+          return r.sum_clean_sheet_prob ?? 0;
+        case "team":
+          return r.team_name ?? r.team ?? "";
+        default:
+          return (
+            (mode === "attack" ? r.avg_attack_difficulty : r.avg_defence_difficulty) ?? 9
+          );
+      }
+    };
+    list.sort((a, b) => {
+      const va = get(a);
+      const vb = get(b);
+      if (typeof va === "string" || typeof vb === "string") {
+        return String(va).localeCompare(String(vb)) * sign;
+      }
+      return ((va as number) - (vb as number)) * sign;
+    });
+    return list;
+  }, [data, sort, dir, mode]);
 
   if (loading) return <Spinner label={t("loading")} />;
   if (error) return <ErrorBox error={error} />;
@@ -27,13 +69,22 @@ export default function FixturesPage() {
             Độ khó riêng cho {mode === "attack" ? "tấn công (khả năng ghi bàn)" : "phòng ngự (khả năng giữ sạch lưới)"} — không dùng FDR chính thức.
           </p>
         </div>
-        <div className="flex gap-1 rounded-md border p-1">
-          <Button size="sm" variant={mode === "attack" ? "default" : "ghost"} onClick={() => setMode("attack")}>
-            Tấn công
-          </Button>
-          <Button size="sm" variant={mode === "defence" ? "default" : "ghost"} onClick={() => setMode("defence")}>
-            Phòng ngự
-          </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          <SortControl
+            value={sort}
+            options={SORT_OPTIONS}
+            dir={dir}
+            onValue={setSort}
+            onDir={setDir}
+          />
+          <div className="flex gap-1 rounded-md border p-1">
+            <Button size="sm" variant={mode === "attack" ? "default" : "ghost"} onClick={() => setMode("attack")}>
+              Tấn công
+            </Button>
+            <Button size="sm" variant={mode === "defence" ? "default" : "ghost"} onClick={() => setMode("defence")}>
+              Phòng ngự
+            </Button>
+          </div>
         </div>
       </div>
 
@@ -49,7 +100,7 @@ export default function FixturesPage() {
                 </tr>
               </thead>
               <tbody>
-                {data.rows.map((row: any) => (
+                {rows.map((row: any) => (
                   <tr key={row.team_id} className="border-b">
                     <td className="whitespace-nowrap p-2 font-semibold">{row.team}</td>
                     {gws.map((g) => {

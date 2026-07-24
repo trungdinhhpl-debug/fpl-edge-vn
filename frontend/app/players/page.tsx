@@ -1,13 +1,33 @@
 "use client";
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
+import { ChevronDown, ChevronUp, ChevronsUpDown } from "lucide-react";
 import { useApi } from "@/lib/api";
 import { useT } from "@/lib/i18n";
 import { Card, CardContent, Select, Input, Spinner, ErrorBox, Badge } from "@/components/ui";
 import { PosTag, RiskBadge, StatusDot } from "@/components/fpl";
+import { SortControl, type SortDir } from "@/components/sort-control";
 import { fmt } from "@/lib/format";
+import { cn } from "@/lib/utils";
 
-type SortKey = "xp_next" | "xp_next5" | "xmins" | "price" | "value_next5" | "selected_by_percent";
+type SortKey =
+  | "xp_next"
+  | "xp_next5"
+  | "xmins"
+  | "price"
+  | "value_next5"
+  | "selected_by_percent"
+  | "clean_sheet_prob";
+
+const SORT_OPTIONS: { key: SortKey; label: string }[] = [
+  { key: "xp_next5", label: "xP 5 vòng" },
+  { key: "xp_next", label: "xP vòng tới" },
+  { key: "xmins", label: "xMins" },
+  { key: "value_next5", label: "Giá trị / triệu" },
+  { key: "price", label: "Giá" },
+  { key: "selected_by_percent", label: "Ownership" },
+  { key: "clean_sheet_prob", label: "Xác suất sạch lưới" },
+];
 
 export default function PlayersPage() {
   const { t } = useT();
@@ -16,6 +36,7 @@ export default function PlayersPage() {
   const [q, setQ] = useState("");
   const [maxPrice, setMaxPrice] = useState("");
   const [sort, setSort] = useState<SortKey>("xp_next5");
+  const [dir, setDir] = useState<SortDir>("desc");
 
   const query = `/api/players?limit=1000${pos ? `&position=${pos}` : ""}${maxPrice ? `&max_price=${maxPrice}` : ""}`;
   const { data, loading, error } = useApi<any>(query);
@@ -23,9 +44,44 @@ export default function PlayersPage() {
   const rows = useMemo(() => {
     let r = (data?.players ?? []) as any[];
     if (q) r = r.filter((p) => p.name.toLowerCase().includes(q.toLowerCase()));
-    r = [...r].sort((a, b) => (b[sort] ?? 0) - (a[sort] ?? 0));
+    const sign = dir === "asc" ? 1 : -1;
+    r = [...r].sort((a, b) => ((a[sort] ?? 0) - (b[sort] ?? 0)) * sign);
     return r.slice(0, 120);
-  }, [data, q, sort]);
+  }, [data, q, sort, dir]);
+
+  /** Bấm tiêu đề cột: chọn cột mới (mặc định cao→thấp) hoặc đảo chiều cột đang xếp. */
+  function toggleSort(key: SortKey) {
+    if (sort === key) setDir((d) => (d === "desc" ? "asc" : "desc"));
+    else {
+      setSort(key);
+      setDir("desc");
+    }
+  }
+
+  /** Tiêu đề cột; truyền key=null cho cột không sắp xếp được. */
+  const th = (label: string, key: SortKey | null, className: string) => (
+    <th key={label} className={className}>
+      {key ? (
+        <button
+          type="button"
+          onClick={() => toggleSort(key)}
+          className={cn(
+            "inline-flex items-center gap-1 rounded transition hover:text-foreground focus:outline-none focus:ring-2 focus:ring-ring/40",
+            sort === key && "font-semibold text-primary",
+          )}
+        >
+          {label}
+          {sort === key ? (
+            dir === "desc" ? <ChevronDown className="h-3 w-3" /> : <ChevronUp className="h-3 w-3" />
+          ) : (
+            <ChevronsUpDown className="h-3 w-3 opacity-40" />
+          )}
+        </button>
+      ) : (
+        label
+      )}
+    </th>
+  );
 
   return (
     <div className="space-y-4">
@@ -51,14 +107,13 @@ export default function PlayersPage() {
             <option key={p} value={p}>£{p.toFixed(1)}</option>
           ))}
         </Select>
-        <Select value={sort} onChange={(e) => setSort(e.target.value as SortKey)}>
-          <option value="xp_next5">Sắp xếp: xP 5 vòng</option>
-          <option value="xp_next">xP vòng tới</option>
-          <option value="xmins">xMins</option>
-          <option value="value_next5">Giá trị / triệu</option>
-          <option value="price">Giá</option>
-          <option value="selected_by_percent">Ownership</option>
-        </Select>
+        <SortControl
+          value={sort}
+          options={SORT_OPTIONS}
+          dir={dir}
+          onValue={setSort}
+          onDir={setDir}
+        />
       </div>
 
       {loading ? (
@@ -72,16 +127,16 @@ export default function PlayersPage() {
               <table className="w-full min-w-[820px] text-sm">
                 <thead className="border-b bg-muted/40 text-xs uppercase text-muted-foreground">
                   <tr>
-                    <th className="p-3 text-left">Cầu thủ</th>
-                    <th className="p-2 text-center">Vị trí</th>
-                    <th className="p-2 text-right">Giá</th>
-                    <th className="p-2 text-right">xP (1)</th>
-                    <th className="p-2 text-right">xP (5)</th>
-                    <th className="p-2 text-right">xMins</th>
-                    <th className="p-2 text-right">Val/£</th>
-                    <th className="p-2 text-right">CS%</th>
-                    <th className="p-2 text-center">Rủi ro</th>
-                    <th className="p-2 text-right">Own%</th>
+                    {th("Cầu thủ", null, "p-3 text-left")}
+                    {th("Vị trí", null, "p-2 text-center")}
+                    {th("Giá", "price", "p-2 text-right")}
+                    {th("xP (1)", "xp_next", "p-2 text-right")}
+                    {th("xP (5)", "xp_next5", "p-2 text-right")}
+                    {th("xMins", "xmins", "p-2 text-right")}
+                    {th("Val/£", "value_next5", "p-2 text-right")}
+                    {th("CS%", "clean_sheet_prob", "p-2 text-right")}
+                    {th("Rủi ro", null, "p-2 text-center")}
+                    {th("Own%", "selected_by_percent", "p-2 text-right")}
                   </tr>
                 </thead>
                 <tbody>
