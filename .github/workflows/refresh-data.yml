@@ -1,0 +1,48 @@
+name: Refresh FPL data
+
+# Tự động nạp dữ liệu FPL mới vào Neon — chạy trên máy chủ GitHub (miễn phí),
+# không cần máy cá nhân. Đổi lịch ở dòng cron bên dưới.
+on:
+  schedule:
+    - cron: "0 */6 * * *"   # mỗi 6 tiếng (giờ UTC)
+  workflow_dispatch: {}      # cho phép bấm "Run workflow" thủ công
+
+concurrency:
+  group: refresh-data
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Kiểm tra secret DATABASE_URL
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          if [ -z "$DATABASE_URL" ]; then
+            echo "::error::Chưa set secret DATABASE_URL. Vào repo Settings → Secrets and variables → Actions → New repository secret."
+            exit 1
+          fi
+          echo "Secret DATABASE_URL OK."
+
+      - name: Cài dependencies
+        working-directory: backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Đồng bộ FPL -> Neon
+        working-directory: backend
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          AUTO_SYNC_ON_STARTUP: "false"
+          PROJECTION_HORIZON: "8"
+          MONTECARLO_ITERATIONS: "5000"
+        run: python -m app.cli sync
