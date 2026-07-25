@@ -282,7 +282,13 @@ def sync_odds(db: Session) -> dict:
     for f in fixtures:
         by_pair.setdefault((f.team_h, f.team_a), f)
 
+    # upsert by fixture_id — NOT db.merge(): merge matches on the primary key
+    # (`id`), which is None for new objects, so it would always INSERT and trip
+    # the unique constraint on fixture_id every run after the first.
+    existing = {r.fixture_id: r for r in db.scalars(select(MarketOdds)).all()}
+
     matched = skipped = 0
+    now = datetime.now(timezone.utc)
     for m in matches:
         hid = match_team_id(m.home_name, teams)
         aid = match_team_id(m.away_name, teams)
@@ -290,14 +296,19 @@ def sync_odds(db: Session) -> dict:
         if not fx:
             skipped += 1
             continue
-        db.merge(MarketOdds(
-            fixture_id=fx.id, gameweek=fx.event, team_h=hid, team_a=aid,
+        values = dict(
+            gameweek=fx.event, team_h=hid, team_a=aid,
             lam_home=m.lam_home, lam_away=m.lam_away,
             p_home=m.p_home, p_draw=m.p_draw, p_away=m.p_away,
             total_goals=m.total_goals, n_bookmakers=m.n_bookmakers,
-            source_name=m.source, is_market=m.is_market,
-            fetched_at=datetime.now(timezone.utc),
-        ))
+            source_name=m.source, is_market=m.is_market, fetched_at=now,
+        )
+        row = existing.get(fx.id)
+        if row is not None:
+            for k, v in values.items():
+                setattr(row, k, v)
+        else:
+            db.add(MarketOdds(fixture_id=fx.id, **values))
         matched += 1
 
     _log(db, "The Odds API (soccer_epl)", ODDS_URL, "ok" if matched else "error",
