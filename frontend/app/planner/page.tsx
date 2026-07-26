@@ -32,10 +32,19 @@ export default function PlannerPage() {
       const imp = await postJSON<any>("/api/team/import", { team_id: Number(teamId) });
       const squad_ids = (imp.picks ?? []).map((p: any) => p.element);
       if (squad_ids.length !== 15) {
+        const st = imp.squad_status;
+        const when = st?.available_after
+          ? ` Đội hình sẽ hiện sau ${new Date(st.available_after).toLocaleString("vi-VN", {
+              timeZone: "Asia/Ho_Chi_Minh",
+              dateStyle: "short",
+              timeStyle: "short",
+            })} (giờ VN).`
+          : "";
         setError(
-          `Đội "${imp.team_name ?? teamId}" chưa có đội hình 15 cầu thủ cho vòng này ` +
-            `(hiện ${squad_ids.length}). Thường gặp trong giai đoạn tiền mùa — hãy chọn đội ` +
-            `trên trang FPL chính thức trước, hoặc dùng Free Hit Lab / Wildcard để dựng đội từ đầu.`,
+          (st?.message ??
+            `Đội "${imp.team_name ?? teamId}" chưa có đội hình 15 cầu thủ (hiện ${squad_ids.length}).`) +
+            when +
+            " Trong lúc chờ, bạn có thể dùng Free Hit Lab để dựng đội hình tối ưu.",
         );
         return;
       }

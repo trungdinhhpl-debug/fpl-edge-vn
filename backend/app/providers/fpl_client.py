@@ -17,7 +17,12 @@ import time
 from typing import Any
 
 import httpx
-from tenacity import retry, stop_after_attempt, wait_exponential
+from tenacity import (
+    retry,
+    retry_if_not_exception_type,
+    stop_after_attempt,
+    wait_exponential,
+)
 
 from app.config import settings
 
@@ -28,6 +33,10 @@ _HEADERS = {
     ),
     "Accept": "application/json",
 }
+
+
+class FPLNotFound(Exception):
+    """The FPL API answered 404 — the resource genuinely isn't public (yet)."""
 
 
 class FPLClient:
@@ -48,9 +57,19 @@ class FPLClient:
     def __exit__(self, *_exc) -> None:
         self.close()
 
-    @retry(stop=stop_after_attempt(4), wait=wait_exponential(multiplier=0.6, max=8))
+    @retry(
+        stop=stop_after_attempt(4),
+        wait=wait_exponential(multiplier=0.6, max=8),
+        # a 404 is a definitive answer (e.g. picks hidden until the deadline),
+        # not a transient failure — don't burn retries on it, and let callers
+        # see the real exception rather than tenacity's RetryError wrapper.
+        retry=retry_if_not_exception_type(FPLNotFound),
+        reraise=True,
+    )
     def _get(self, path: str) -> Any:
         resp = self._client.get(f"{self.base_url}{path}")
+        if resp.status_code == 404:
+            raise FPLNotFound(path)
         resp.raise_for_status()
         return resp.json()
 

@@ -6,6 +6,7 @@ import { postJSON, getJSON } from "@/lib/api";
 import { useT } from "@/lib/i18n";
 import { Card, CardContent, CardHeader, CardTitle, Button, Input, Spinner, ErrorBox, Badge, Stat } from "@/components/ui";
 import { PosTag, StatusDot } from "@/components/fpl";
+import { DeadlineCountdown } from "@/components/deadline-countdown";
 import { fmt } from "@/lib/format";
 import { riskBg } from "@/lib/utils";
 
@@ -100,11 +101,29 @@ export default function MyTeamPage() {
           )}
 
           {squadIds.length !== 15 && (
-            <div className="rounded-md border border-caution/40 bg-caution/10 p-3 text-sm text-caution">
-              Đội này chưa có đội hình 15 cầu thủ cho vòng hiện tại (đang thấy {squadIds.length}).
-              Thường gặp ở giai đoạn tiền mùa giải — hãy chọn đội trên trang FPL chính thức trước.
-              Trong lúc đó bạn vẫn dùng được <b>Free Hit Lab</b> để xem đội hình tối ưu, và
-              <b> Cầu thủ / Đội trưởng / Lịch thi đấu</b> để nghiên cứu.
+            <div className="space-y-2 rounded-md border border-caution/40 bg-caution/10 p-3 text-sm text-caution">
+              <p>
+                {imported.squad_status?.message ??
+                  `Chưa lấy được đội hình 15 cầu thủ (đang thấy ${squadIds.length}).`}
+              </p>
+              {imported.squad_status?.available_after && (
+                <p className="flex flex-wrap items-center gap-2">
+                  <span>Đội hình sẽ hiện sau:</span>
+                  <b>
+                    {new Date(imported.squad_status.available_after).toLocaleString("vi-VN", {
+                      timeZone: "Asia/Ho_Chi_Minh",
+                      dateStyle: "short",
+                      timeStyle: "short",
+                    })}{" "}
+                    (giờ VN)
+                  </b>
+                  <DeadlineCountdown iso={imported.squad_status.available_after} />
+                </p>
+              )}
+              <p className="text-muted-foreground">
+                Trong lúc chờ bạn vẫn dùng được <b>Free Hit Lab</b> (dựng đội hình tối ưu), và{" "}
+                <b>Cầu thủ / Đội trưởng / Lịch thi đấu</b> để nghiên cứu.
+              </p>
             </div>
           )}
 

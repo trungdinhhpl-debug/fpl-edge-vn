@@ -13,7 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import UserProfile
-from app.providers.fpl_client import FPLClient
+from app.providers.fpl_client import FPLClient, FPLNotFound
 
 
 def upsert_profile(db: Session, team_id: int, **values) -> UserProfile:
@@ -40,16 +40,28 @@ def import_team(db: Session, team_id: int) -> dict:
         entry = client.entry(team_id)
         history = client.entry_history(team_id)
 
-        # find the latest gameweek that has picks
+        # find the latest gameweek that has picks. Before the season starts the
+        # history is empty, so fall back to the entry's first gameweek.
         current_events = history.get("current", [])
-        latest_gw = current_events[-1]["event"] if current_events else None
+        latest_gw = (
+            current_events[-1]["event"]
+            if current_events
+            else entry.get("started_event") or None
+        )
 
         picks_data = {}
+        picks_error: str | None = None
         if latest_gw:
             try:
                 picks_data = client.entry_picks(team_id, latest_gw)
-            except Exception:
+            except FPLNotFound:
+                # FPL hides a manager's squad until that gameweek's deadline
+                # passes (so nobody can copy it) -> 404 before the deadline.
                 picks_data = {}
+                picks_error = "not_public_yet"
+            except Exception as exc:
+                picks_data = {}
+                picks_error = str(exc)[:120]
 
     eh = picks_data.get("entry_history", {})
     bank = eh.get("bank", entry.get("last_deadline_bank", 0) or 0)
@@ -92,14 +104,46 @@ def import_team(db: Session, team_id: int) -> dict:
         "free_transfers": free_transfers,
         "current_gameweek": latest_gw,
         "picks": picks,
-        # pre-season, or a manager who hasn't picked a squad yet, returns no picks
         "has_squad": len(picks) == 15,
+        # why the squad isn't here yet + when it will be (spec §5: be explicit)
+        "squad_status": _squad_status(db, latest_gw, picks, picks_error),
         "chips_used": chips_used,
         "history": [
             {"event": h["event"], "points": h["points"], "rank": h.get("overall_rank")}
             for h in current_events
         ],
         "note": "Selling prices approximated at current price (public API limit).",
+    }
+
+
+def _squad_status(db: Session, gw: int | None, picks: list, error: str | None) -> dict:
+    """Explain squad availability, with the exact deadline it unlocks."""
+    from app.models import Gameweek
+
+    if len(picks) == 15:
+        return {"code": "ok", "gameweek": gw, "available_after": None, "message": ""}
+
+    deadline = None
+    if gw:
+        row = db.get(Gameweek, gw)
+        if row and row.deadline_time:
+            deadline = row.deadline_time.isoformat()
+
+    if error == "not_public_yet":
+        return {
+            "code": "hidden_until_deadline",
+            "gameweek": gw,
+            "available_after": deadline,
+            "message": (
+                f"FPL chỉ công khai đội hình sau hạn chót vòng {gw} (để không ai xem "
+                f"trước đội của bạn). Sau thời điểm đó, nhập lại Team ID là dùng được ngay."
+            ),
+        }
+    return {
+        "code": "no_squad",
+        "gameweek": gw,
+        "available_after": deadline,
+        "message": "Chưa lấy được đội hình 15 cầu thủ cho vòng này.",
     }
 
 
