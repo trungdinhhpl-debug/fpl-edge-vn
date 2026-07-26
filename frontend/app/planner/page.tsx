@@ -30,7 +30,15 @@ export default function PlannerPage() {
     setLoading(true); setError(null);
     try {
       const imp = await postJSON<any>("/api/team/import", { team_id: Number(teamId) });
-      const squad_ids = imp.picks.map((p: any) => p.element);
+      const squad_ids = (imp.picks ?? []).map((p: any) => p.element);
+      if (squad_ids.length !== 15) {
+        setError(
+          `Đội "${imp.team_name ?? teamId}" chưa có đội hình 15 cầu thủ cho vòng này ` +
+            `(hiện ${squad_ids.length}). Thường gặp trong giai đoạn tiền mùa — hãy chọn đội ` +
+            `trên trang FPL chính thức trước, hoặc dùng Free Hit Lab / Wildcard để dựng đội từ đầu.`,
+        );
+        return;
+      }
       const res = await postJSON("/api/optimizer/long-term", {
         squad_ids, bank: imp.bank, free_transfers: imp.free_transfers ?? 1, horizon, discount: 0.9,
       });

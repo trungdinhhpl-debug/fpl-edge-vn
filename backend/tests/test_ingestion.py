@@ -54,6 +54,32 @@ def test_sync_odds_is_idempotent(db, monkeypatch):
     assert row.lam_away == 0.7
 
 
+def test_import_same_team_id_twice(db):
+    """Importing the same FPL Team ID again must update, not duplicate/crash.
+
+    Regression: db.merge(UserProfile(...)) matched on the primary key (id), so
+    the second import violated the unique constraint on fpl_team_id and the
+    Long-term Planner returned a 502.
+    """
+    from app.ingestion.team_import import upsert_profile
+    from app.models import UserProfile
+
+    p1 = upsert_profile(db, 454370, player_name="Trung Đinh", team_name="Donald Trung",
+                        bank=0, team_value=1000, free_transfers=1)
+    assert p1.fpl_team_id == 454370
+
+    p2 = upsert_profile(db, 454370, player_name="Trung Đinh", team_name="Donald Trung",
+                        bank=15, team_value=1012, free_transfers=2)
+    assert p2.id == p1.id                 # same row, updated in place
+    assert p2.bank == 15
+    assert p2.free_transfers == 2
+    assert db.scalar(
+        select(func.count()).select_from(UserProfile).where(
+            UserProfile.fpl_team_id == 454370
+        )
+    ) == 1
+
+
 def test_sync_odds_without_key_is_safe(db, monkeypatch):
     """No API key => log it, change nothing, never raise."""
     import app.providers.probability as prob

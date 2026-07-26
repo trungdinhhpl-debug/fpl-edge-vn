@@ -65,8 +65,11 @@ def sync_bootstrap(db: Session, client: FPLClient) -> dict:
     data = client.bootstrap_static()
     url = f"{settings.fpl_base_url}/bootstrap-static/"
 
-    # season
+    # season — look up by name too: `name` is unique, so a row that exists but
+    # isn't flagged current would otherwise cause a duplicate-key insert.
     season = db.scalar(select(Season).where(Season.is_current.is_(True)))
+    if not season:
+        season = db.scalar(select(Season).where(Season.name == SEASON))
     if not season:
         db.add(Season(name=SEASON, is_current=True, scoring_source=SCORING_SOURCE))
 

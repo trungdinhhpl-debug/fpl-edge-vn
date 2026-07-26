@@ -9,10 +9,30 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import UserProfile
 from app.providers.fpl_client import FPLClient
+
+
+def upsert_profile(db: Session, team_id: int, **values) -> UserProfile:
+    """Insert-or-update a manager profile, keyed on `fpl_team_id`.
+
+    NOT db.merge(): merge matches on the primary key (`id`), which is None for a
+    new object, so importing the same Team ID twice would violate the unique
+    constraint on fpl_team_id.
+    """
+    profile = db.scalar(select(UserProfile).where(UserProfile.fpl_team_id == team_id))
+    if profile is None:
+        profile = UserProfile(fpl_team_id=team_id)
+        db.add(profile)
+    for key, val in values.items():
+        setattr(profile, key, val)
+    profile.last_synced = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(profile)
+    return profile
 
 
 def import_team(db: Session, team_id: int) -> dict:
@@ -38,15 +58,16 @@ def import_team(db: Session, team_id: int) -> dict:
     # estimate free transfers (public API can't give the exact banked count)
     free_transfers = _estimate_free_transfers(current_events)
 
-    profile = db.merge(UserProfile(
-        fpl_team_id=team_id,
+    profile = upsert_profile(
+        db,
+        team_id,
         player_name=f"{entry.get('player_first_name', '')} {entry.get('player_last_name', '')}".strip(),
         team_name=entry.get("name"),
         overall_rank=entry.get("summary_overall_rank"),
-        bank=bank, team_value=value, free_transfers=free_transfers,
-        last_synced=datetime.now(timezone.utc),
-    ))
-    db.commit()
+        bank=bank,
+        team_value=value,
+        free_transfers=free_transfers,
+    )
 
     picks = [
         {
@@ -71,6 +92,8 @@ def import_team(db: Session, team_id: int) -> dict:
         "free_transfers": free_transfers,
         "current_gameweek": latest_gw,
         "picks": picks,
+        # pre-season, or a manager who hasn't picked a squad yet, returns no picks
+        "has_squad": len(picks) == 15,
         "chips_used": chips_used,
         "history": [
             {"event": h["event"], "points": h["points"], "rank": h.get("overall_rank")}

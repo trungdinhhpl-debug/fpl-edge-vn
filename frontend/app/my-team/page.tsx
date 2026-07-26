@@ -99,11 +99,30 @@ export default function MyTeamPage() {
             <p className="text-xs text-muted-foreground">ℹ {imported.note}</p>
           )}
 
+          {squadIds.length !== 15 && (
+            <div className="rounded-md border border-caution/40 bg-caution/10 p-3 text-sm text-caution">
+              Đội này chưa có đội hình 15 cầu thủ cho vòng hiện tại (đang thấy {squadIds.length}).
+              Thường gặp ở giai đoạn tiền mùa giải — hãy chọn đội trên trang FPL chính thức trước.
+              Trong lúc đó bạn vẫn dùng được <b>Free Hit Lab</b> để xem đội hình tối ưu, và
+              <b> Cầu thủ / Đội trưởng / Lịch thi đấu</b> để nghiên cứu.
+            </div>
+          )}
+
           <div className="flex flex-wrap gap-2">
-            <Button variant="outline" onClick={analyze} disabled={busy === "analyze"}>
+            <Button
+              variant="outline"
+              onClick={analyze}
+              disabled={busy === "analyze" || squadIds.length !== 15}
+              title={squadIds.length !== 15 ? "Cần đủ 15 cầu thủ" : undefined}
+            >
               <Wand2 className="h-4 w-4" /> {busy === "analyze" ? "…" : "Phân tích đội hình"}
             </Button>
-            <Button variant="outline" onClick={optimizeNext} disabled={busy === "next"}>
+            <Button
+              variant="outline"
+              onClick={optimizeNext}
+              disabled={busy === "next" || squadIds.length !== 15}
+              title={squadIds.length !== 15 ? "Cần đủ 15 cầu thủ" : undefined}
+            >
               {busy === "next" ? "…" : "Tối ưu vòng tới"} <ArrowRight className="h-4 w-4" />
             </Button>
             <Link href="/planner"><Button variant="outline">Kế hoạch 3–8 vòng</Button></Link>
