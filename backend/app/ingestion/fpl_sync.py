@@ -323,6 +323,81 @@ def sync_odds(db: Session) -> dict:
 ODDS_URL = "https://the-odds-api.com/"
 
 
+# ------------------------------------- Championship (đội mới lên hạng) --------
+def sync_championship(db: Session) -> dict:
+    """Lấy bảng Championship mùa trước cho các đội vừa lên hạng (tuỳ chọn).
+
+    Chỉ ghi dữ liệu cho những đội KHÔNG có lịch sử Ngoại hạng — các đội lâu năm
+    đã có dữ liệu tốt hơn nhiều. Tắt bằng CHAMPIONSHIP_ENABLED=false.
+    """
+    from app.models import ChampionshipStats, Player
+    from app.providers.championship import (
+        SOURCE_NAME,
+        fetch_championship_table,
+        league_averages,
+        season_code,
+    )
+    from app.providers.probability import match_team_id
+
+    if not settings.championship_enabled:
+        return {"enabled": False, "matched": 0}
+
+    # năm bắt đầu mùa Ngoại hạng hiện tại, lấy từ trận sớm nhất trong lịch
+    first = db.scalars(
+        select(Fixture).where(Fixture.kickoff_time.isnot(None)).order_by(Fixture.kickoff_time)
+    ).first()
+    if not first or not first.kickoff_time:
+        return {"enabled": True, "matched": 0, "error": "chưa có lịch thi đấu"}
+    pl_year = first.kickoff_time.year
+
+    try:
+        stats, url = fetch_championship_table(pl_year)
+    except Exception as exc:
+        _log(db, SOURCE_NAME, "https://www.football-data.co.uk/", "error", 0,
+             str(exc)[:250], "stats")
+        db.commit()
+        return {"enabled": True, "matched": 0, "error": str(exc)[:200]}
+
+    avg_gf, avg_ga = league_averages(stats)
+
+    # đội nào không có lịch sử Ngoại hạng -> coi là mới lên hạng
+    minutes_by_team: dict[int, int] = {}
+    for p in db.scalars(select(Player)).all():
+        minutes_by_team[p.team_id] = minutes_by_team.get(p.team_id, 0) + (p.minutes or 0)
+    promoted_ids = {tid for tid, mins in minutes_by_team.items() if mins < 6000}
+
+    teams = {t.id: t.name for t in db.scalars(select(Team)).all()}
+    existing = {r.team_id: r for r in db.scalars(select(ChampionshipStats)).all()}
+
+    matched = 0
+    now = datetime.now(timezone.utc)
+    season = season_code(pl_year)
+    for s in stats:
+        tid = match_team_id(s.name, teams)
+        if tid is None or tid not in promoted_ids:
+            continue
+        values = dict(
+            source_team_name=s.name, season=season, played=s.played,
+            goals_for=s.goals_for, goals_against=s.goals_against,
+            # chỉ số TƯƠNG ĐỐI trong Championship (1.0 = trung bình giải đó)
+            attack_index=round(s.gf_per_game / avg_gf, 4) if avg_gf else 1.0,
+            defence_index=round(avg_ga / s.ga_per_game, 4) if s.ga_per_game else 1.0,
+            source_name="football-data.co.uk", source_url=url, fetched_at=now,
+        )
+        row = existing.get(tid)
+        if row is not None:
+            for k, v in values.items():
+                setattr(row, k, v)
+        else:
+            db.add(ChampionshipStats(team_id=tid, **values))
+        matched += 1
+
+    _log(db, SOURCE_NAME, url, "ok" if matched else "error", matched,
+         f"{matched} đội mới lên hạng khớp dữ liệu Championship {season}", "stats")
+    db.commit()
+    return {"enabled": True, "matched": matched, "season": season}
+
+
 # ----------------------------------------------------------------- full sync --
 def run_full_sync(db: Session, build_proj: bool = True, detail: bool = False) -> dict:
     result: dict = {"started_at": datetime.now(timezone.utc).isoformat()}
@@ -331,6 +406,7 @@ def run_full_sync(db: Session, build_proj: bool = True, detail: bool = False) ->
         result["fixtures"] = sync_fixtures(db, client)
     result["experts"] = seed_experts(db)
     result["odds"] = sync_odds(db)
+    result["championship"] = sync_championship(db)
     if build_proj:
         from app.engine.projections import build_projections
         result["projections"] = build_projections(db)

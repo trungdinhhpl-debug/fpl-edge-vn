@@ -162,3 +162,78 @@ def test_promoted_team_not_rated_elite_defence():
     cs_new = ts.clean_sheet_prob(2, 1, True)
     cs_old = ts.clean_sheet_prob(1, 2, True)
     assert cs_new < cs_old
+
+
+# ------------------------------------- Championship (đội mới lên hạng) --------
+def test_championship_season_code():
+    from app.providers.championship import season_code
+
+    assert season_code(2026) == "2526"   # Ngoại hạng 2026/27 -> Championship 2025/26
+    assert season_code(2025) == "2425"
+
+
+def test_championship_ranks_promoted_teams_without_exceeding_average():
+    """Dữ liệu Championship chỉ để xếp hạng 3 đội với nhau, luôn dưới TB Ngoại hạng."""
+    from app.engine.team_strength import PROMOTED_ATTACK, TeamStrength
+
+    class T:
+        def __init__(self, i):
+            self.id = i
+            self.strength = None
+            self.strength_attack_home = self.strength_attack_away = None
+            self.strength_defence_home = self.strength_defence_away = None
+
+    class P:
+        def __init__(self, tid, mins, xg, xgc):
+            self.team_id = tid
+            self.minutes = mins
+            self.expected_goals = xg
+            self.expected_assists = 0.0
+            self.expected_goals_conceded = xgc
+
+    established = [P(1, 3000, 12.0, 45.0) for _ in range(12)]
+    strong_promoted = [P(2, 0, 0.0, 0.0) for _ in range(12)]   # vô địch Championship
+    weak_promoted = [P(3, 0, 0.0, 0.0) for _ in range(12)]     # thắng play-off
+
+    ts = TeamStrength(
+        [T(1), T(2), T(3)],
+        established + strong_promoted + weak_promoted,
+        [],
+        promoted={2: (1.62, 1.33), 3: (1.17, 0.91)},  # chỉ số trong Championship
+        promoted_damping=0.35,
+    )
+    strong, weak = ts._rates[2], ts._rates[3]
+
+    assert strong.attack_home > weak.attack_home       # phân hoá đúng thứ tự
+    assert strong.defence_home > weak.defence_home
+    assert strong.attack_home <= 1.0                   # không bao giờ vượt TB giải
+    assert strong.defence_home <= 1.0
+    assert weak.attack_home >= 0.5                     # cũng không bị dìm quá đà
+
+
+def test_championship_can_be_switched_off():
+    """Không có dữ liệu Championship -> quay về mức nền phẳng, không lỗi."""
+    from app.engine.team_strength import (
+        PROMOTED_ATTACK,
+        PROMOTED_DEFENCE,
+        TeamStrength,
+    )
+
+    class T:
+        def __init__(self, i):
+            self.id = i
+            self.strength = None
+            self.strength_attack_home = self.strength_attack_away = None
+            self.strength_defence_home = self.strength_defence_away = None
+
+    class P:
+        def __init__(self, tid):
+            self.team_id = tid
+            self.minutes = 0
+            self.expected_goals = 0.0
+            self.expected_assists = 0.0
+            self.expected_goals_conceded = 0.0
+
+    ts = TeamStrength([T(1)], [P(1) for _ in range(12)], [], promoted=None)
+    assert ts._rates[1].attack_home == PROMOTED_ATTACK
+    assert ts._rates[1].defence_home == PROMOTED_DEFENCE

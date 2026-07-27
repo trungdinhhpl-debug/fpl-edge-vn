@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.engine.fixture_difficulty import rate_fixture
-from app.engine.team_strength import TeamStrength, load_market_map
+from app.engine.team_strength import TeamStrength, load_market_map, load_promoted_map
 from app.models import Fixture, Player, Team
 from app.services.common import gw_fixture_count_by_team, planning_start_gw, team_lookup
 
@@ -19,6 +19,8 @@ def _build_ts(db: Session) -> TeamStrength:
         teams, players, finished,
         market=load_market_map(db),
         market_weight=settings.odds_market_weight,
+        promoted=load_promoted_map(db),
+        promoted_damping=settings.championship_damping,
     )
 
 

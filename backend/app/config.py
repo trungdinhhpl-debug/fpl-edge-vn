@@ -51,6 +51,13 @@ class Settings(BaseSettings):
     # Understat (optional, Phase 2). Empty => rely on FPL's own xG/xA.
     understat_enabled: bool = False
 
+    # Championship data for newly-promoted clubs (free CSV, no key).
+    # Only used to rank the promoted sides against each other — see
+    # app/providers/championship.py. Set false to drop the feature entirely.
+    championship_enabled: bool = True
+    # how strongly Championship dominance carries over (0 = ignore, 1 = full)
+    championship_damping: float = 0.35
+
     # ---- Ingestion / jobs ----
     auto_sync_on_startup: bool = True      # run a sync if the DB looks empty
     enable_scheduler: bool = False         # APScheduler background refresh

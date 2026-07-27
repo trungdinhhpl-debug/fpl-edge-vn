@@ -70,6 +70,30 @@ export default function MethodologyPage() {
           </CardContent>
         </Card>
 
+        {data?.championship_data?.teams_covered ? (
+          <Card>
+            <CardHeader><CardTitle>Đội mới lên hạng</CardTitle></CardHeader>
+            <CardContent className="space-y-2 text-sm text-muted-foreground">
+              <p>
+                Ba đội vừa lên hạng không có dữ liệu Ngoại hạng. Thay vì chấm giống hệt nhau,
+                hệ thống dùng kết quả <b>Championship {data.championship_data.season}</b>{" "}
+                ({data.championship_data.teams_covered} đội, nguồn {data.championship_data.source})
+                để <b>xếp hạng họ so với nhau</b>.
+              </p>
+              <p>
+                Quan trọng: <b>không</b> quy đổi bàn thắng Championship thành bàn thắng Ngoại hạng.
+                Chỉ số được neo vào mức nền dành cho đội mới lên hạng và{" "}
+                <b>không bao giờ vượt mức trung bình giải</b> — vô địch Championship vẫn được coi
+                là dưới trung bình Ngoại hạng.
+              </p>
+              <p>
+                Mức nền này tự động bị thay thế khi có bằng chứng tốt hơn: kèo nhà cái →
+                chỉ số sức mạnh của FPL → kết quả thật khi mùa giải diễn ra.
+              </p>
+            </CardContent>
+          </Card>
+        ) : null}
+
         <Card>
           <CardHeader><CardTitle>Monte Carlo & rủi ro</CardTitle></CardHeader>
           <CardContent className="space-y-2 text-sm text-muted-foreground">

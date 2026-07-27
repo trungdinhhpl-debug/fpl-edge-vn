@@ -122,6 +122,30 @@ class MarketOdds(Base):
     )
 
 
+# ------------------------------------- Championship (đội mới lên hạng) --------
+class ChampionshipStats(Base):
+    """Thành tích Championship mùa trước của các đội vừa lên hạng (tuỳ chọn).
+
+    Chỉ dùng để xếp hạng ba đội mới lên hạng so với nhau — xem
+    app/providers/championship.py. Tắt bằng CHAMPIONSHIP_ENABLED=false.
+    """
+    __tablename__ = "championship_stats"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    team_id: Mapped[int] = mapped_column(Integer, unique=True, index=True)  # FPL team id
+    source_team_name: Mapped[str] = mapped_column(String(64))
+    season: Mapped[str] = mapped_column(String(16))
+    played: Mapped[int] = mapped_column(Integer, default=0)
+    goals_for: Mapped[int] = mapped_column(Integer, default=0)
+    goals_against: Mapped[int] = mapped_column(Integer, default=0)
+    attack_index: Mapped[float] = mapped_column(Float, default=1.0)   # so với TB Championship
+    defence_index: Mapped[float] = mapped_column(Float, default=1.0)
+    source_name: Mapped[str] = mapped_column(String(64), default="football-data.co.uk")
+    source_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    fetched_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
 # --------------------------------------------------------------- users --------
 class UserProfile(Base):
     __tablename__ = "user_profiles"

@@ -42,10 +42,25 @@ def model_health(db: Session = Depends(get_db)) -> dict:
     })
     odds_at = db.scalar(select(func.max(MarketOdds.fetched_at)))
 
+    from app.models import ChampionshipStats
+
+    champ_rows = db.scalars(select(ChampionshipStats)).all()
+
     return {
         "model_version": settings.model_version,
         "players": n_players,
         "projections": n_proj,
+        "championship_data": {
+            "enabled": settings.championship_enabled,
+            "teams_covered": len(champ_rows),
+            "season": champ_rows[0].season if champ_rows else None,
+            "source": champ_rows[0].source_name if champ_rows else None,
+            "damping": settings.championship_damping,
+            "note": (
+                "Chỉ dùng để xếp hạng các đội mới lên hạng so với nhau, luôn giữ "
+                "dưới mức trung bình Ngoại hạng. Tắt bằng CHAMPIONSHIP_ENABLED=false."
+            ),
+        },
         "market_odds": {
             "enabled": bool(settings.odds_api_key),
             "fixtures_covered": n_odds,

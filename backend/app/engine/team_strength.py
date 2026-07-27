@@ -53,6 +53,23 @@ def load_market_map(db) -> dict[tuple[int, int], tuple[float, float]]:
     return {(r.team_h, r.team_a): (r.lam_home, r.lam_away) for r in rows}
 
 
+def load_promoted_map(db) -> dict[int, tuple[float, float]]:
+    """{team_id: (attack_index, defence_index)} từ Championship mùa trước.
+
+    Rỗng nếu tắt tính năng hoặc chưa đồng bộ — khi đó đội mới lên hạng dùng
+    mức nền phẳng.
+    """
+    from sqlalchemy import select
+
+    from app.config import settings
+    from app.models import ChampionshipStats
+
+    if not settings.championship_enabled:
+        return {}
+    rows = db.scalars(select(ChampionshipStats)).all()
+    return {r.team_id: (r.attack_index, r.defence_index) for r in rows}
+
+
 @dataclass
 class TeamRates:
     team_id: int
@@ -74,6 +91,8 @@ class TeamStrength:
         finished_fixtures: list,
         market: dict[tuple[int, int], tuple[float, float]] | None = None,
         market_weight: float = 0.7,
+        promoted: dict[int, tuple[float, float]] | None = None,
+        promoted_damping: float = 0.35,
     ) -> None:
         """`market` maps (home_team_id, away_team_id) -> (lam_home, lam_away)
         from bookmaker prices. Where present it is blended over the internal
@@ -81,6 +100,9 @@ class TeamStrength:
         self._rates: dict[int, TeamRates] = {}
         self._market = market or {}
         self._market_weight = market_weight
+        # {team_id: (attack_index, defence_index)} tương đối trong Championship
+        self._promoted = promoted or {}
+        self._promoted_damping = promoted_damping
         self._build(teams, players, finished_fixtures)
 
     def has_market(self, team_id: int, opp_id: int, is_home: bool) -> bool:
@@ -158,6 +180,17 @@ class TeamStrength:
             if promoted:
                 # không đủ dữ liệu Ngoại hạng -> dùng mức nền, KHÔNG chia cho mẫu ~0
                 derived_att, derived_def = PROMOTED_ATTACK, PROMOTED_DEFENCE
+                # nếu có dữ liệu Championship: chỉ dùng để XẾP HẠNG ba đội mới lên
+                # hạng so với nhau quanh mức nền, không quy đổi bàn thắng trực tiếp.
+                champ = self._promoted.get(t.id)
+                if champ:
+                    d = self._promoted_damping
+                    a_idx = max(champ[0], 0.2) ** d
+                    d_idx = max(champ[1], 0.2) ** d
+                    # trần 1.0: dữ liệu Championship không bao giờ đủ để chấm một
+                    # đội mới lên hạng ngang/hơn mức trung bình Ngoại hạng
+                    derived_att = min(PROMOTED_ATTACK * a_idx, 1.0)
+                    derived_def = min(PROMOTED_DEFENCE * d_idx, 1.0)
             else:
                 derived_att = (
                     _clamp(team_xg.get(t.id, 0.0) / mean_team_xg) if mean_team_xg else 1.0

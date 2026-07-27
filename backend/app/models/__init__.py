@@ -9,6 +9,7 @@ from app.models.core import (  # noqa: F401
     Team,
 )
 from app.models.meta import (  # noqa: F401
+    ChampionshipStats,
     ExpertSignal,
     ExpertSource,
     InjuryReport,
@@ -37,6 +38,7 @@ __all__ = [
     "PlayerProjection",
     "ExpertSource",
     "ExpertSignal",
+    "ChampionshipStats",
     "InjuryReport",
     "MarketOdds",
     "SetPieceRole",
