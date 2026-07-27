@@ -123,3 +123,42 @@ def test_market_odds_override_model():
     assert m_against < 1.0
     assert with_mkt.has_market(1, 2, True)
     assert not with_mkt.has_market(2, 1, True)
+
+
+def test_promoted_team_not_rated_elite_defence():
+    """Đội mới lên hạng (không có dữ liệu Ngoại hạng) không được chấm phòng ngự tốt.
+
+    Regression: chia mean_xGA cho mẫu ~0 đẩy chỉ số phòng ngự kịch trần, khiến
+    Coventry/Ipswich có xác suất giữ sạch lưới cao hơn cả Arsenal.
+    """
+    from app.engine.team_strength import TeamStrength
+
+    class T:
+        def __init__(self, i):
+            self.id = i
+            self.strength = None
+            self.strength_attack_home = self.strength_attack_away = None
+            self.strength_defence_home = self.strength_defence_away = None
+
+    class P:
+        def __init__(self, tid, mins, xg, xgc):
+            self.team_id = tid
+            self.minutes = mins
+            self.expected_goals = xg
+            self.expected_assists = 0.0
+            self.expected_goals_conceded = xgc
+
+    established = [P(1, 3000, 12.0, 45.0) for _ in range(12)]   # đội lâu năm
+    promoted = [P(2, 0, 0.0, 0.0) for _ in range(12)]           # đội mới lên hạng
+    ts = TeamStrength([T(1), T(2)], established + promoted, [])
+
+    strong = ts._rates[1]
+    new = ts._rates[2]
+    assert new.defence_home < strong.defence_home     # không được "khoẻ" hơn đội có dữ liệu
+    assert 0.6 <= new.defence_home <= 0.95            # ở mức dưới trung bình, không cực đoan
+    assert 0.6 <= new.attack_home <= 0.95
+
+    # và giữ sạch lưới phải khó hơn cho đội mới lên hạng khi gặp cùng đối thủ
+    cs_new = ts.clean_sheet_prob(2, 1, True)
+    cs_old = ts.clean_sheet_prob(1, 2, True)
+    assert cs_new < cs_old

@@ -22,6 +22,19 @@ SHRINK_K = 6.0           # matches before empirical dominates
 MIN_LAMBDA = 0.15
 MAX_LAMBDA = 4.5
 
+# Newly-promoted sides have no Premier League history to learn from. Rather than
+# dividing by a near-zero sample (which produced absurd ratings — an elite
+# defence index for a promoted club), fall back to a documented prior: newly
+# promoted teams both score fewer and concede more than the league average.
+# These are deliberately round numbers — they are a placeholder that is replaced
+# the moment better evidence exists, in this order:
+#   1. bookmaker odds for the fixture (market view, already integrated)
+#   2. FPL's own strength ratings once published for the season
+#   3. real match results as the season progresses (empirical shrinkage)
+PROMOTED_ATTACK = 0.80    # 1.0 = league average attack
+PROMOTED_DEFENCE = 0.80   # 1.0 = league average defence (lower = concedes more)
+MIN_HISTORY_MINUTES = 6000   # squad minutes below this = effectively no PL history
+
 
 def _clamp(v: float, lo: float = 0.55, hi: float = 1.7) -> float:
     return max(lo, min(hi, v))
@@ -116,6 +129,11 @@ class TeamStrength:
             team_xga_proxy[p.team_id] = max(
                 team_xga_proxy.get(p.team_id, 0.0), p.expected_goals_conceded or 0.0
             )
+        # tổng số phút Ngoại hạng của cả đội — dùng để phát hiện đội mới lên hạng
+        team_minutes: dict[int, int] = {t.id: 0 for t in teams}
+        for p in players:
+            team_minutes[p.team_id] = team_minutes.get(p.team_id, 0) + (p.minutes or 0)
+
         _xg_vals = [v for v in team_xg.values() if v > 0]
         _xga_vals = [v for v in team_xga_proxy.values() if v > 0]
         mean_team_xg = sum(_xg_vals) / len(_xg_vals) if _xg_vals else 1.0
@@ -132,9 +150,23 @@ class TeamStrength:
             # fallback indices from last-season player xG/xGA when FPL ratings
             # aren't set yet (pre-season). Attack: higher = stronger. Defence:
             # higher = concedes fewer = stronger (matches how expected_goals uses it).
-            derived_att = _clamp(team_xg.get(t.id, 0.0) / mean_team_xg) if mean_team_xg else 1.0
             _xga = team_xga_proxy.get(t.id, 0.0)
-            derived_def = _clamp(mean_team_xga / _xga) if _xga else 1.0
+            promoted = (
+                team_minutes.get(t.id, 0) < MIN_HISTORY_MINUTES
+                or team_xg.get(t.id, 0.0) < 0.05 * mean_team_xg
+            )
+            if promoted:
+                # không đủ dữ liệu Ngoại hạng -> dùng mức nền, KHÔNG chia cho mẫu ~0
+                derived_att, derived_def = PROMOTED_ATTACK, PROMOTED_DEFENCE
+            else:
+                derived_att = (
+                    _clamp(team_xg.get(t.id, 0.0) / mean_team_xg) if mean_team_xg else 1.0
+                )
+                derived_def = (
+                    _clamp(mean_team_xga / max(_xga, 0.35 * mean_team_xga))
+                    if _xga and mean_team_xga
+                    else 1.0
+                )
             has_fpl = bool(t.strength_attack_home)
 
             self._rates[t.id] = TeamRates(
