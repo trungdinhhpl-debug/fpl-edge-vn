@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { MessageCircle, Send, X, Sparkles } from "lucide-react";
+import { Send, X } from "lucide-react";
 import { postJSON } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
@@ -22,6 +22,37 @@ const GREETING: Msg = {
     "Tiền đạo nào tốt nhất dưới 7 triệu?",
   ],
 };
+
+/** Quả bóng đá vẽ bằng SVG (nét sắc ở mọi kích thước, không phụ thuộc emoji hệ điều hành). */
+function Football({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 64 64" className={className} role="presentation" aria-hidden>
+      <defs>
+        <radialGradient id="ballShade" cx="35%" cy="30%" r="75%">
+          <stop offset="0%" stopColor="#ffffff" />
+          <stop offset="70%" stopColor="#f1f5f9" />
+          <stop offset="100%" stopColor="#cbd5e1" />
+        </radialGradient>
+      </defs>
+      <circle cx="32" cy="32" r="30" fill="url(#ballShade)" stroke="#0f172a" strokeWidth="2" />
+      {/* ngũ giác trung tâm */}
+      <polygon points="32,18 42,25 38,37 26,37 22,25" fill="#0f172a" />
+      {/* các mảng quanh rìa */}
+      <polygon points="32,4 40,10 32,15 24,10" fill="#0f172a" opacity="0.92" />
+      <polygon points="60,26 56,37 47,32 50,21" fill="#0f172a" opacity="0.92" />
+      <polygon points="4,26 14,21 17,32 8,37" fill="#0f172a" opacity="0.92" />
+      <polygon points="20,58 24,47 34,47 38,58" fill="#0f172a" opacity="0.92" />
+      {/* đường nối */}
+      <g stroke="#0f172a" strokeWidth="1.6" fill="none" opacity="0.75">
+        <path d="M32 15 L32 18" />
+        <path d="M47 32 L42 25" />
+        <path d="M17 32 L22 25" />
+        <path d="M26 37 L24 47" />
+        <path d="M38 37 L34 47" />
+      </g>
+    </svg>
+  );
+}
 
 /** Markdown tối giản: **đậm**, *nghiêng*, `code` — đủ cho câu trả lời của bot. */
 function renderText(text: string) {
@@ -105,10 +136,23 @@ export function ChatWidget() {
       {!open && (
         <button
           onClick={() => setOpen(true)}
-          aria-label="Mở trợ lý hỏi đáp"
-          className="fixed bottom-5 right-5 z-50 flex h-14 w-14 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-lg transition hover:scale-105 focus:outline-none focus:ring-2 focus:ring-ring"
+          aria-label="Mở trợ lý hỏi đáp AI"
+          className="group fixed bottom-5 right-5 z-50 flex flex-col items-center gap-1.5 focus:outline-none"
         >
-          <MessageCircle className="h-6 w-6" />
+          {/* nhãn phía trên quả bóng */}
+          <span className="chat-label relative rounded-full bg-primary px-3 py-1 text-[11px] font-bold uppercase tracking-wide text-primary-foreground shadow-lg">
+            AI Chatbot
+            <span className="absolute -bottom-1 left-1/2 h-2 w-2 -translate-x-1/2 rotate-45 bg-primary" />
+          </span>
+
+          {/* quả bóng nảy + xoay, có vòng sáng lan toả */}
+          <span className="relative flex h-14 w-14 items-center justify-center">
+            <span className="chat-ring absolute inset-0 rounded-full bg-primary/40" />
+            <span className="absolute inset-0 rounded-full bg-primary/15 blur-md" />
+            <span className="ball-bounce relative block h-14 w-14 drop-shadow-lg transition-transform group-hover:scale-110 group-focus-visible:scale-110">
+              <Football className="ball-spin h-14 w-14" />
+            </span>
+          </span>
         </button>
       )}
 
@@ -117,11 +161,9 @@ export function ChatWidget() {
           {/* header */}
           <div className="flex items-center justify-between border-b px-4 py-3">
             <div className="flex items-center gap-2">
-              <span className="flex h-8 w-8 items-center justify-center rounded-full bg-primary/15 text-primary">
-                <Sparkles className="h-4 w-4" />
-              </span>
+              <Football className="h-8 w-8" />
               <div>
-                <div className="text-sm font-semibold">Trợ lý FPL Edge</div>
+                <div className="text-sm font-semibold">AI Chatbot · FPL Edge</div>
                 <div className="text-[11px] text-muted-foreground">
                   Trả lời từ dữ liệu thật của web
                 </div>
