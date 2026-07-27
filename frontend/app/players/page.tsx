@@ -35,15 +35,30 @@ export default function PlayersPage() {
   const [pos, setPos] = useState("");
   const [q, setQ] = useState("");
   const [maxPrice, setMaxPrice] = useState("");
+  const [teamId, setTeamId] = useState("");
   const [sort, setSort] = useState<SortKey>("xp_next5");
   const [dir, setDir] = useState<SortDir>("desc");
 
-  const query = `/api/players?limit=1000${pos ? `&position=${pos}` : ""}${maxPrice ? `&max_price=${maxPrice}` : ""}`;
+  const query =
+    `/api/players?limit=1000` +
+    (pos ? `&position=${pos}` : "") +
+    (maxPrice ? `&max_price=${maxPrice}` : "") +
+    (teamId ? `&team_id=${teamId}` : "");
   const { data, loading, error } = useApi<any>(query);
+  const { data: teamData } = useApi<any>("/api/teams");
 
   const rows = useMemo(() => {
     let r = (data?.players ?? []) as any[];
-    if (q) r = r.filter((p) => p.name.toLowerCase().includes(q.toLowerCase()));
+    if (q) {
+      // tìm theo tên cầu thủ HOẶC tên đội (vd gõ "Arsenal", "MCI")
+      const needle = q.toLowerCase().trim();
+      r = r.filter(
+        (p) =>
+          p.name.toLowerCase().includes(needle) ||
+          (p.team ?? "").toLowerCase().includes(needle) ||
+          (p.team_name ?? "").toLowerCase().includes(needle),
+      );
+    }
     const sign = dir === "asc" ? 1 : -1;
     r = [...r].sort((a, b) => ((a[sort] ?? 0) - (b[sort] ?? 0)) * sign);
     return r.slice(0, 120);
@@ -93,8 +108,21 @@ export default function PlayersPage() {
       </div>
 
       <div className="flex flex-wrap gap-2">
-        <Input placeholder="Tìm cầu thủ…" value={q} onChange={(e) => setQ(e.target.value)} className="max-w-[200px]" />
-        <Select value={pos} onChange={(e) => setPos(e.target.value)}>
+        <Input
+          placeholder="Tìm cầu thủ hoặc đội…"
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          className="max-w-[220px]"
+        />
+        <Select value={teamId} onChange={(e) => setTeamId(e.target.value)} aria-label="Lọc theo đội">
+          <option value="">Tất cả đội</option>
+          {(teamData?.teams ?? []).map((tm: any) => (
+            <option key={tm.id} value={tm.id}>
+              {tm.name}
+            </option>
+          ))}
+        </Select>
+        <Select value={pos} onChange={(e) => setPos(e.target.value)} aria-label="Lọc theo vị trí">
           <option value="">Tất cả vị trí</option>
           <option value="GK">Thủ môn</option>
           <option value="DEF">Hậu vệ</option>
@@ -114,6 +142,27 @@ export default function PlayersPage() {
           onValue={setSort}
           onDir={setDir}
         />
+      </div>
+
+      <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
+        <span>
+          {loading ? "Đang lọc…" : `${rows.length} cầu thủ`}
+          {rows.length >= 120 && " (hiển thị 120 đầu tiên)"}
+        </span>
+        {(q || pos || maxPrice || teamId) && (
+          <button
+            type="button"
+            onClick={() => {
+              setQ("");
+              setPos("");
+              setMaxPrice("");
+              setTeamId("");
+            }}
+            className="rounded-md border px-2 py-0.5 transition hover:bg-muted"
+          >
+            Xoá bộ lọc
+          </button>
+        )}
       </div>
 
       {loading ? (
