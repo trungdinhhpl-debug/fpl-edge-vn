@@ -15,7 +15,12 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.engine import risk as risk_mod
 from app.engine.montecarlo import MCPlayer, simulate_fixture, summarise
-from app.engine.team_strength import TeamStrength, load_market_map, load_promoted_map
+from app.engine.team_strength import (
+    NO_HISTORY_RATIO,
+    TeamStrength,
+    load_market_map,
+    load_promoted_map,
+)
 from app.engine.xmins import estimate_minutes
 from app.engine.xpoints import _poisson_ge_k, expected_points
 from app.models import (
@@ -111,6 +116,31 @@ def build_projections(
     for p in players:
         players_by_team[p.team_id].append(p)
 
+    # Đội chưa có dữ liệu Ngoại hạng (mới lên hạng): cầu thủ của họ có 0 phút nên
+    # tỷ lệ đá chính tính từ mẫu rỗng sẽ ra ~2% cho tất cả. Thay vào đó xếp hạng
+    # vai trò dự kiến theo giá FPL trong từng vị trí (giá do FPL đặt theo vai trò).
+    team_minutes: dict[int, int] = defaultdict(int)
+    for p in players:
+        team_minutes[p.team_id] += p.minutes or 0
+    ref_minutes = max(team_minutes.values()) if team_minutes else 0
+    no_history_teams = {
+        tid for tid, mins in team_minutes.items()
+        if ref_minutes > 0 and mins < NO_HISTORY_RATIO * ref_minutes
+    }
+    # Xếp hạng cho MỌI đội: tân binh ở CLB lâu năm cũng có 0 phút Ngoại hạng
+    # (vd cầu thủ mua từ giải nước ngoài) nên cũng cần ước lượng theo vai trò.
+    # Xếp hạng trong toàn bộ vị trí của đội để so được với người đã có chỗ đứng.
+    role_rank: dict[int, int] = {}
+    for tid, squad in players_by_team.items():
+        by_pos: dict[int, list[Player]] = defaultdict(list)
+        for p in squad:
+            by_pos[p.element_type].append(p)
+        for pos_players in by_pos.values():
+            # giá cao hơn = vai trò dự kiến lớn hơn; hoà giá thì theo ownership
+            pos_players.sort(key=lambda x: (-x.now_cost, -x.selected_by_percent))
+            for i, p in enumerate(pos_players):
+                role_rank[p.id] = i
+
     n_written = 0
     for gw in gws:
         gw_fx = fx_by_gw.get(gw, {})
@@ -139,6 +169,8 @@ def build_projections(
                         team_matches_played=matches_played.get(team.id, 0),
                         recent_minutes=recent_minutes.get(p.id) or None,
                         n_fixtures_this_gw=1,  # per-fixture; DGW handled by summing
+                        no_pl_history=team.id in no_history_teams,
+                        role_rank=role_rank.get(p.id),
                     )
                     bd = expected_points(
                         element_type=p.element_type,

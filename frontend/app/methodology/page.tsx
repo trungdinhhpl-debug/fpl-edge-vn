@@ -37,6 +37,13 @@ export default function MethodologyPage() {
               phải 98%, ngồi ghế vòng 1 cho ~30% chứ không phải 0%. Độ tự tin chỉ tăng khi bằng
               chứng tích luỹ: sau 10 vòng đá chính đều đặn mới lên ~91%.
             </p>
+            <p>
+              <b>Cầu thủ chưa có phút Ngoại hạng</b> (đội mới lên hạng, tân binh từ giải khác):
+              không thể tính tỷ lệ từ mẫu rỗng, nên vai trò được ước lượng theo{" "}
+              <b>giá FPL trong từng vị trí của đội</b> — giá do FPL đặt phản ánh vai trò dự kiến.
+              Nhóm này luôn bị gắn <b>độ tin cậy Thấp</b> và được thay bằng số phút thật chỉ sau
+              vài vòng đấu. Cờ chấn thương/treo giò vẫn luôn được ưu tiên hơn.
+            </p>
           </CardContent>
         </Card>
 

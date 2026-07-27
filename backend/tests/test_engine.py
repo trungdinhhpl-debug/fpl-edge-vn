@@ -311,3 +311,55 @@ def test_one_gameweek_sample_does_not_create_certainty():
         season_starts=10, season_minutes=900, team_matches_played=10,
     )
     assert nailed.p_start > 0.85
+
+
+def test_zero_minutes_player_uses_role_prior_not_zero():
+    """Cầu thủ chưa có phút Ngoại hạng nào (đội mới lên hạng, hoặc tân binh).
+
+    Regression: chia 0 starts cho 38 trận -> mọi cầu thủ Coventry/Hull/Ipswich và
+    75 tân binh đều ra p_start ~2%, tức mô hình bảo "đội này không xếp ai đá".
+    """
+    common = dict(
+        status="a", chance_of_playing=None, season_starts=0,
+        season_minutes=0, team_matches_played=0,
+    )
+    first_choice = estimate_minutes(element_type=4, role_rank=0, **common)
+    fringe = estimate_minutes(element_type=4, role_rank=5, **common)
+
+    assert 0.5 < first_choice.p_start < 0.8    # có khả năng đá chính, nhưng không chắc
+    assert first_choice.xmins > 40
+    assert fringe.p_start < 0.2                # người ngoài nhóm chính vẫn thấp
+    assert first_choice.confidence == "Low"    # luôn gắn nhãn tin cậy thấp
+    assert "mới lên hạng" in first_choice.reason or "vai trò" in first_choice.reason
+
+
+def test_backup_goalkeeper_not_inflated():
+    """Thủ môn số 2 gần như không ra sân — không được dùng thang của cầu thủ ngoài sân."""
+    common = dict(
+        element_type=1, status="a", chance_of_playing=None, season_starts=0,
+        season_minutes=0, team_matches_played=0,
+    )
+    first = estimate_minutes(role_rank=0, **common)
+    backup = estimate_minutes(role_rank=1, **common)
+    assert first.p_start > 0.5
+    assert backup.p_start < 0.15
+    assert backup.p_sub < 0.05                 # thủ môn không được tung vào từ ghế
+
+
+def test_role_prior_never_overrides_injury_flag():
+    """Có cờ chấn thương/treo giò thì vẫn phải về ~0 dù xếp hạng vai trò cao."""
+    out = estimate_minutes(
+        element_type=4, status="i", chance_of_playing=0, season_starts=0,
+        season_minutes=0, team_matches_played=0, role_rank=0,
+    )
+    assert out.p_start == 0.0
+    assert out.xmins == 0.0
+
+
+def test_players_with_history_unaffected_by_role_prior():
+    """Cầu thủ đã có phút thi đấu vẫn dùng dữ liệu thật, không rơi vào nhánh vai trò."""
+    nailed = estimate_minutes(
+        element_type=2, status="a", chance_of_playing=None, season_starts=36,
+        season_minutes=3200, team_matches_played=0, role_rank=8,   # rank thấp
+    )
+    assert nailed.p_start > 0.85    # dữ liệu thật thắng, không bị kéo về 0.12

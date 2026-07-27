@@ -26,6 +26,21 @@ PRIOR_GAMES = 2.0
 PRIOR_START_RATE = 0.45
 PRIOR_APPEAR_RATE = 0.60
 
+# Players at newly-promoted clubs have ZERO Premier League minutes, so the
+# minutes-based rate above would rate every one of them at ~2% to start — i.e.
+# the model would claim the club fields nobody. For those squads we fall back to
+# expected role, ranked by FPL's own price within each position (price is set by
+# FPL to reflect expected involvement). Clearly a weak signal: confidence is
+# forced to Low and it is replaced by real minutes within a few gameweeks.
+TYPICAL_STARTERS = {1: 1, 2: 4, 3: 4, 4: 2}   # GK, DEF, MID, FWD in a typical XI
+# trong đội hình chính / cận kề / còn lại
+ROLE_START_PROB = (0.62, 0.34, 0.12)
+ROLE_APPEAR_BONUS = (0.10, 0.22, 0.16)        # thêm xác suất vào sân từ ghế
+# Thủ môn gần như "được ăn cả": thủ môn số 2 hiếm khi ra sân, và cũng không được
+# tung vào từ ghế dự bị như cầu thủ ngoài sân.
+ROLE_START_PROB_GK = (0.62, 0.10, 0.03)
+ROLE_APPEAR_BONUS_GK = (0.02, 0.01, 0.01)
+
 
 @dataclass
 class MinutesEstimate:
@@ -64,6 +79,8 @@ def estimate_minutes(
     team_matches_played: int,
     recent_minutes: list[int] | None = None,
     n_fixtures_this_gw: int = 1,
+    no_pl_history: bool = False,
+    role_rank: int | None = None,
 ) -> MinutesEstimate:
     avail_mult, avail_reason = _availability_multiplier(status, chance_of_playing)
 
@@ -88,6 +105,18 @@ def estimate_minutes(
     appear_rate = min(
         (est_appearances + PRIOR_GAMES * PRIOR_APPEAR_RATE) / (games_ref + PRIOR_GAMES), 1.0
     )
+
+    # Không có phút Ngoại hạng nào (đội mới lên hạng, hoặc tân binh từ giải khác)
+    # -> ước lượng theo vai trò dự kiến, xếp hạng bằng giá FPL trong từng vị trí,
+    # thay vì tính tỷ lệ từ mẫu rỗng (vốn ra ~2% cho tất cả).
+    role_based = role_rank is not None and season_minutes == 0 and not recent_minutes
+    if role_based:
+        slots = TYPICAL_STARTERS.get(element_type, 4)
+        tier = 0 if role_rank < slots else (1 if role_rank == slots else 2)
+        probs = ROLE_START_PROB_GK if element_type == 1 else ROLE_START_PROB
+        bonus = ROLE_APPEAR_BONUS_GK if element_type == 1 else ROLE_APPEAR_BONUS
+        start_rate = probs[tier]
+        appear_rate = min(0.95, start_rate + bonus[tier])
 
     # recent-form start signal (weight recent games higher)
     if recent_minutes:
@@ -122,6 +151,8 @@ def estimate_minutes(
     # confidence
     if status != "a" and (chance_of_playing is None or chance_of_playing < 75):
         confidence = "Low"
+    elif role_based:
+        confidence = "Low"   # suy từ giá/vai trò, chưa có phút Ngoại hạng nào
     elif recent_minutes and len(recent_minutes) >= 4 and 0.15 < p_start < 0.9:
         confidence = "Medium"
     elif p_start >= 0.9 or p_start <= 0.05:
@@ -136,6 +167,8 @@ def estimate_minutes(
     # main reason
     if avail_reason:
         reason = f"Availability: {avail_reason}"
+    elif role_based:
+        reason = "Đội mới lên hạng — ước lượng theo vai trò/giá, chưa có dữ liệu Ngoại hạng"
     elif n_fixtures_this_gw > 1:
         reason = f"Double gameweek ({n_fixtures_this_gw} fixtures); {sample_note}"
     elif p_start >= 0.9:
