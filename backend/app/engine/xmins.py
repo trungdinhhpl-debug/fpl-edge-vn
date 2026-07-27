@@ -11,11 +11,20 @@ xMins is treated as a first-class driver of xP — never a cosmetic label.
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 E_MIN_START = 84.0     # avg minutes when a player starts
 E_MIN_SUB = 20.0       # avg minutes when introduced from the bench
 CONGESTION_PENALTY = 0.08   # rotation risk multiplier per extra fixture in a DGW
+
+# Laplace smoothing for start/appearance rates. Without it, the first gameweek of
+# a season yields absurd certainty: one start => 98% nailed, one benching => 0%
+# chance of starting. PRIOR_GAMES acts as that many "imaginary" games at the
+# baseline rate, so confidence grows only as real evidence accumulates.
+PRIOR_GAMES = 2.0
+PRIOR_START_RATE = 0.45
+PRIOR_APPEAR_RATE = 0.60
 
 
 @dataclass
@@ -64,14 +73,21 @@ def estimate_minutes(
     # treated as a nailed starter. Once the season is under way, use games played.
     games_ref = 38 if team_matches_played <= 0 else team_matches_played
 
-    # season start & appearance rates
-    start_rate = min(season_starts / games_ref, 1.0)
+    # season start & appearance rates, smoothed toward a neutral prior so a
+    # one-game sample can't read as certainty in either direction
+    start_rate = min(
+        (season_starts + PRIOR_GAMES * PRIOR_START_RATE) / (games_ref + PRIOR_GAMES), 1.0
+    )
     appearances = 0
     if recent_minutes:
         appearances = sum(1 for m in recent_minutes if m > 0)
-    # crude appearance count if we lack per-GW data
-    est_appearances = max(appearances, round(season_minutes / 75.0)) or 1
-    appear_rate = min(est_appearances / games_ref, 1.0)
+    # crude appearance count if we lack per-GW data. ceil (not round) so that
+    # a short cameo still counts as an appearance, and 0 minutes stays 0 —
+    # otherwise an unused player looks identical to a regular substitute.
+    est_appearances = max(appearances, math.ceil(season_minutes / 75.0))
+    appear_rate = min(
+        (est_appearances + PRIOR_GAMES * PRIOR_APPEAR_RATE) / (games_ref + PRIOR_GAMES), 1.0
+    )
 
     # recent-form start signal (weight recent games higher)
     if recent_minutes:

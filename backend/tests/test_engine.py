@@ -234,6 +234,80 @@ def test_championship_can_be_switched_off():
             self.expected_assists = 0.0
             self.expected_goals_conceded = 0.0
 
-    ts = TeamStrength([T(1)], [P(1) for _ in range(12)], [], promoted=None)
+    class PF:
+        def __init__(self, tid):
+            self.team_id = tid
+            self.minutes = 3000
+            self.expected_goals = 12.0
+            self.expected_assists = 0.0
+            self.expected_goals_conceded = 45.0
+
+    # cần một đội có lịch sử làm mốc thì mới nhận ra đội nào là mới lên hạng
+    established = [PF(9) for _ in range(12)]
+    ts = TeamStrength(
+        [T(9), T(1)], established + [P(1) for _ in range(12)], [], promoted=None
+    )
     assert ts._rates[1].attack_home == PROMOTED_ATTACK
     assert ts._rates[1].defence_home == PROMOTED_DEFENCE
+
+
+# --------------------------------- chuyển sang dữ liệu thật sau vòng 1 --------
+def test_after_gameweek1_no_team_flagged_as_promoted():
+    """FPL reset thống kê đầu mùa: sau vòng 1 mọi đội chỉ có ~1000 phút.
+
+    Regression: ngưỡng tuyệt đối khiến TẤT CẢ các đội (kể cả Man City) bị coi là
+    mới lên hạng và tụt xuống mức nền 0.80.
+    """
+    from app.engine.team_strength import PROMOTED_ATTACK, TeamStrength
+
+    class T:
+        def __init__(self, i):
+            self.id = i
+            self.strength = None
+            self.strength_attack_home = self.strength_attack_away = None
+            self.strength_defence_home = self.strength_defence_away = None
+
+    class P:
+        def __init__(self, tid, xg):
+            self.team_id = tid
+            self.minutes = 90            # đúng 1 trận
+            self.expected_goals = xg
+            self.expected_assists = 0.0
+            self.expected_goals_conceded = 1.2
+
+    teams = [T(1), T(2), T(3)]
+    players = [P(t, xg) for t, xg in ((1, 0.9), (2, 0.25), (3, 0.05)) for _ in range(11)]
+    ts = TeamStrength(teams, players, [])
+
+    for tid in (1, 2, 3):
+        assert ts._rates[tid].attack_home != PROMOTED_ATTACK   # không bị gán nhãn
+        # một trận đấu không đủ để kết luận mạnh/yếu -> phải gần mức trung bình
+        assert 0.85 <= ts._rates[tid].attack_home <= 1.25
+
+
+def test_one_gameweek_sample_does_not_create_certainty():
+    """Đá chính/ngồi ghế đúng 1 trận không được cho ra 98% hay 0%."""
+    started = estimate_minutes(
+        element_type=3, status="a", chance_of_playing=None,
+        season_starts=1, season_minutes=90, team_matches_played=1,
+    )
+    benched = estimate_minutes(
+        element_type=3, status="a", chance_of_playing=None,
+        season_starts=0, season_minutes=20, team_matches_played=1,
+    )
+    unused = estimate_minutes(
+        element_type=3, status="a", chance_of_playing=None,
+        season_starts=0, season_minutes=0, team_matches_played=1,
+    )
+    assert 0.45 < started.p_start < 0.8      # có tín hiệu nhưng chưa chắc chắn
+    assert 0.1 < benched.p_start < 0.45
+    assert started.p_start > benched.p_start > 0
+    # vào sân từ ghế phải khác hẳn người không ra sân
+    assert benched.p_sub > unused.p_sub
+
+    # nhưng sau 10 vòng thì bằng chứng đủ để tự tin
+    nailed = estimate_minutes(
+        element_type=3, status="a", chance_of_playing=None,
+        season_starts=10, season_minutes=900, team_matches_played=10,
+    )
+    assert nailed.p_start > 0.85

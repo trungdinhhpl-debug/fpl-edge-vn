@@ -31,6 +31,12 @@ export default function MethodologyPage() {
               xMins = P(start)·E[phút|start] + P(sub)·E[phút|sub]
             </code>
             <p>Đầu ra kèm P(đá chính), P(vào sân), P(không ra sân), khoảng tin cậy và lý do chính.</p>
+            <p>
+              <b>Chuyển sang dữ liệu thật:</b> tỷ lệ đá chính được làm mượt (Laplace) nên một
+              trận duy nhất không tạo ra kết luận chắc nịch — đá chính vòng 1 cho ~63% chứ không
+              phải 98%, ngồi ghế vòng 1 cho ~30% chứ không phải 0%. Độ tự tin chỉ tăng khi bằng
+              chứng tích luỹ: sau 10 vòng đá chính đều đặn mới lên ~91%.
+            </p>
           </CardContent>
         </Card>
 

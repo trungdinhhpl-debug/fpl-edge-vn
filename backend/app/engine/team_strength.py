@@ -33,7 +33,16 @@ MAX_LAMBDA = 4.5
 #   3. real match results as the season progresses (empirical shrinkage)
 PROMOTED_ATTACK = 0.80    # 1.0 = league average attack
 PROMOTED_DEFENCE = 0.80   # 1.0 = league average defence (lower = concedes more)
-MIN_HISTORY_MINUTES = 6000   # squad minutes below this = effectively no PL history
+
+# "No PL history" must be judged RELATIVE to the rest of the league, never by an
+# absolute minute count: FPL resets season stats when a new season starts, so a
+# fixed threshold would flag *every* club as newly promoted after gameweek 1.
+NO_HISTORY_RATIO = 0.35      # squad minutes below 35% of the league median
+# Sample size (squad minutes) at which derived indices are trusted over the
+# league average — one round of fixtures must not make a team look elite.
+HISTORY_SHRINK_MINUTES = 8000
+# Championship results stop influencing a club once it has real PL matches.
+CHAMP_FADE_MATCHES = 5
 
 
 def _clamp(v: float, lo: float = 0.55, hi: float = 1.7) -> float:
@@ -156,6 +165,10 @@ class TeamStrength:
         for p in players:
             team_minutes[p.team_id] = team_minutes.get(p.team_id, 0) + (p.minutes or 0)
 
+        # Mốc so sánh = đội có nhiều phút nhất. Dùng max thay vì trung vị vì
+        # trung vị bị kéo về 0 khi nhiều đội cùng chưa có dữ liệu.
+        reference_minutes = max(team_minutes.values()) if team_minutes else 0
+
         _xg_vals = [v for v in team_xg.values() if v > 0]
         _xga_vals = [v for v in team_xga_proxy.values() if v > 0]
         mean_team_xg = sum(_xg_vals) / len(_xg_vals) if _xg_vals else 1.0
@@ -173,9 +186,10 @@ class TeamStrength:
             # aren't set yet (pre-season). Attack: higher = stronger. Defence:
             # higher = concedes fewer = stronger (matches how expected_goals uses it).
             _xga = team_xga_proxy.get(t.id, 0.0)
+            own_minutes = team_minutes.get(t.id, 0)
             promoted = (
-                team_minutes.get(t.id, 0) < MIN_HISTORY_MINUTES
-                or team_xg.get(t.id, 0.0) < 0.05 * mean_team_xg
+                reference_minutes > 0
+                and own_minutes < NO_HISTORY_RATIO * reference_minutes
             )
             if promoted:
                 # không đủ dữ liệu Ngoại hạng -> dùng mức nền, KHÔNG chia cho mẫu ~0
@@ -183,8 +197,10 @@ class TeamStrength:
                 # nếu có dữ liệu Championship: chỉ dùng để XẾP HẠNG ba đội mới lên
                 # hạng so với nhau quanh mức nền, không quy đổi bàn thắng trực tiếp.
                 champ = self._promoted.get(t.id)
-                if champ:
-                    d = self._promoted_damping
+                # dữ liệu Championship nhạt dần rồi tắt hẳn khi đã có trận thật
+                champ_w = max(0.0, 1.0 - mp / CHAMP_FADE_MATCHES)
+                if champ and champ_w > 0:
+                    d = self._promoted_damping * champ_w
                     a_idx = max(champ[0], 0.2) ** d
                     d_idx = max(champ[1], 0.2) ** d
                     # trần 1.0: dữ liệu Championship không bao giờ đủ để chấm một
@@ -192,14 +208,19 @@ class TeamStrength:
                     derived_att = min(PROMOTED_ATTACK * a_idx, 1.0)
                     derived_def = min(PROMOTED_DEFENCE * d_idx, 1.0)
             else:
-                derived_att = (
+                raw_att = (
                     _clamp(team_xg.get(t.id, 0.0) / mean_team_xg) if mean_team_xg else 1.0
                 )
-                derived_def = (
+                raw_def = (
                     _clamp(mean_team_xga / max(_xga, 0.35 * mean_team_xga))
                     if _xga and mean_team_xga
                     else 1.0
                 )
+                # cỡ mẫu nhỏ (vd vừa hết vòng 1) -> kéo về trung bình giải, tránh
+                # kết luận một đội mạnh/yếu chỉ từ một trận đấu
+                w_hist = own_minutes / (own_minutes + HISTORY_SHRINK_MINUTES)
+                derived_att = w_hist * raw_att + (1 - w_hist) * 1.0
+                derived_def = w_hist * raw_def + (1 - w_hist) * 1.0
             has_fpl = bool(t.strength_attack_home)
 
             self._rates[t.id] = TeamRates(
