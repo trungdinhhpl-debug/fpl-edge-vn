@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 import { Providers } from "./providers";
 import { Nav } from "@/components/nav";
+import { ChatWidget } from "@/components/chat-widget";
 
 export const metadata: Metadata = {
   title: "FPL Edge VN — Quyết định FPL dựa trên dữ liệu",
@@ -23,6 +24,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               Mọi dự báo đều kèm mức tin cậy — không phải lời khẳng định chắc chắn.
             </p>
           </footer>
+          <ChatWidget />
         </Providers>
       </body>
     </html>

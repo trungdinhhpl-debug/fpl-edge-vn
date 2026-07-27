@@ -36,6 +36,10 @@ class FreeHitRequest(BaseModel):
     excluded: list[int] = Field(default_factory=list)
 
 
+class ChatRequest(BaseModel):
+    question: str = Field(..., min_length=1, max_length=500)
+
+
 class WildcardRequest(BaseModel):
     budget: int = Field(1000, ge=800, le=1200)
     horizon: int = Field(6, ge=3, le=10)

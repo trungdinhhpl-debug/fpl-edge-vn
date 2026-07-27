@@ -7,8 +7,10 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
 from app.models import Fixture, Team
+from app.schemas import ChatRequest
 from app.services.captains import captain_ranking
-from app.services.common import team_lookup
+from app.services.chat import answer_question
+from app.services.common import planning_start_gw, team_lookup
 from app.services.fixtures import fixture_ticker
 from app.services.gameweek import dashboard, gameweek_status
 from app.services.news import expert_consensus, news_feed
@@ -113,3 +115,15 @@ def get_news(impact: str | None = None, limit: int = 100,
 @router.get("/expert-consensus")
 def get_expert_consensus(db: Session = Depends(get_db)) -> dict:
     return expert_consensus(db)
+
+
+@router.post("/chat")
+def post_chat(req: ChatRequest, db: Session = Depends(get_db)) -> dict:
+    """Hỏi–đáp bám dữ liệu: câu trả lời lắp từ số liệu trong DB, không sinh tự do."""
+    result = answer_question(db, req.question)
+    # kèm thẻ cầu thủ để giao diện hiển thị
+    if result.get("players"):
+        from app.services.team import hydrate
+
+        result["player_cards"] = hydrate(db, result["players"], planning_start_gw(db))
+    return result

@@ -32,6 +32,7 @@ def captain_ranking(db: Session, gw: int | None = None, limit: int = 20) -> dict
             **base,
             "captain_xp": round(pr.xp * 2, 2),
             "xp": round(pr.xp, 2),
+            "xmins": round(pr.xmins, 1),
             "p_start": pr.p_start,
             "p_haul": pr.p_haul,          # >=10 pts (so >=20 as captain)
             "p_returns": pr.p_returns,
