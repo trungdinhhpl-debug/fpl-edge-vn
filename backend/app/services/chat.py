@@ -354,19 +354,508 @@ def _answer_gameweek(db: Session) -> dict:
     return _ok(txt, suggestions=["Ai nên làm đội trưởng?", "Đội nào có lịch dễ?"])
 
 
+# Cách người Việt hay viết tên đội, khác với tên FPL dùng
+TEAM_ALIASES = {
+    "tottenham": "TOT", "tottenham hotspur": "TOT",
+    "manchester city": "MCI", "man city": "MCI",
+    "manchester united": "MUN", "man united": "MUN", "manu": "MUN", "quy do": "MUN",
+    "nottingham forest": "NFO", "nottm forest": "NFO",
+    "newcastle united": "NEW", "brighton hove albion": "BHA",
+    "coventry city": "COV", "hull city": "HUL", "ipswich town": "IPS",
+    "leeds united": "LEE", "phao thu": "ARS", "the kop": "LIV",
+}
+
+
+def _find_team(db: Session, question: str) -> int | None:
+    """Dò tên đội trong câu hỏi.
+
+    Mã viết tắt CHỈ được nhận khi viết HOA trong câu gốc: nhiều mã trùng với từ
+    tiếng Việt thông dụng sau khi bỏ dấu ("tốt" -> tot = Tottenham,
+    "chê" -> che = Chelsea), sẽ cướp nhầm ý định của câu hỏi.
+    """
+    q = _norm(question)
+    upper_tokens = set(re.findall(r"[A-Z]{2,4}", question))
+    by_short = {t.short_name.upper(): tid for tid, t in team_lookup(db).items()}
+
+    best, best_len = None, 0
+
+    # 1) tên gọi quen thuộc
+    for alias, short in TEAM_ALIASES.items():
+        if re.search(rf"(^|\W){re.escape(alias)}(\W|$)", q) and len(alias) > best_len:
+            tid = by_short.get(short)
+            if tid:
+                best, best_len = tid, len(alias)
+
+    # 2) tên đầy đủ theo FPL
+    for tid, t in team_lookup(db).items():
+        n = _norm(t.name)
+        if n and re.search(rf"(^|\W){re.escape(n)}(\W|$)", q) and len(n) > best_len:
+            best, best_len = tid, len(n)
+
+    # 3) mã viết tắt — chỉ khi VIẾT HOA
+    if best is None:
+        for code in upper_tokens:
+            if code in by_short:
+                return by_short[code]
+    return best
+
+
+def _answer_team_players(db: Session, team_id: int) -> dict:
+    """Cầu thủ tốt nhất của một đội cụ thể."""
+    gw = planning_start_gw(db)
+    gws = list(range(gw, gw + 5))
+    hx = horizon_xp(db, gws)
+    projs = projections_for_gw(db, gw)
+    teams = team_lookup(db)
+    team = teams.get(team_id)
+
+    squad = [p for p in db.scalars(select(Player)).all() if p.team_id == team_id]
+    rows = []
+    for p in squad:
+        pr = projs.get(p.id)
+        if not pr or pr.xmins < 20:
+            continue
+        rows.append((hx.get(p.id, 0.0), p, pr))
+    rows.sort(key=lambda r: -r[0])
+    if not rows:
+        return _no_data(f"chưa có dự báo cho {team.name if team else 'đội này'}")
+
+    lines = [f"**Cầu thủ đáng chú ý của {team.name}** (xP 5 vòng):", ""]
+    for i, (xp5, p, pr) in enumerate(rows[:7], 1):
+        pen = " · đá pen" if p.penalties_order == 1 else ""
+        lines.append(
+            f"{i}. **{p.web_name}** ({POS_VI.get(_pos_name(p.element_type), '')}, "
+            f"{_fmt_money(p.now_cost / 10)}) — xP5 **{xp5:.1f}** · xP vòng tới {pr.xp:.1f} · "
+            f"xMins {pr.xmins:.0f}′ · rủi ro {pr.overall_risk}{pen}"
+        )
+    return _ok("\n".join(lines), players=[r[1].id for r in rows[:5]],
+               suggestions=[f"Lịch {team.short_name} thế nào?", "Ai nên làm đội trưởng?"])
+
+
+def _answer_team_fixtures(db: Session, team_id: int) -> dict:
+    """Lịch thi đấu sắp tới của một đội."""
+    t = fixture_ticker(db, n_gws=6)
+    teams = team_lookup(db)
+    row = next((r for r in t["rows"] if r["team_id"] == team_id), None)
+    if not row:
+        return _no_data("không tìm thấy lịch của đội này")
+    lines = [f"**Lịch 6 vòng tới của {row['team_name']}:**", ""]
+    for gw in t["gameweeks"]:
+        cells = row["cells"].get(str(gw), [])
+        if not cells:
+            lines.append(f"- GW{gw}: **nghỉ (blank)**")
+            continue
+        for c in cells:
+            venue = "sân nhà" if c["is_home"] else "sân khách"
+            mk = " · theo kèo nhà cái" if c.get("has_market") else ""
+            lines.append(
+                f"- GW{gw}: gặp **{c['opponent']}** ({venue}) — ghi {c['proj_goals_for']:.1f} / "
+                f"thủng {c['proj_goals_against']:.1f} · sạch lưới {round(c['clean_sheet_prob'] * 100)}%{mk}"
+            )
+    lines += [
+        "",
+        f"→ Tổng 6 vòng: **{row['sum_proj_goals']:.1f}** bàn kỳ vọng, "
+        f"**{row['sum_clean_sheet_prob']:.2f}** trận sạch lưới kỳ vọng.",
+    ]
+    return _ok("\n".join(lines),
+               suggestions=[f"Cầu thủ {teams[team_id].short_name} nào tốt nhất?",
+                            "Đội nào có lịch dễ?"])
+
+
+def _answer_penalties(db: Session) -> dict:
+    """Danh sách người đá phạt đền / phạt góc."""
+    gw = planning_start_gw(db)
+    projs = projections_for_gw(db, gw)
+    teams = team_lookup(db)
+    takers = [
+        p for p in db.scalars(select(Player)).all()
+        if p.penalties_order == 1 and p.status == "a"
+    ]
+    takers.sort(key=lambda p: -(projs[p.id].xp if p.id in projs else 0))
+    if not takers:
+        return _no_data("chưa có dữ liệu người đá penalty")
+    lines = ["**Người đá phạt đền số 1 của các đội:**", ""]
+    for p in takers[:12]:
+        pr = projs.get(p.id)
+        t = teams.get(p.team_id)
+        extra = f" · xP {pr.xp:.1f}" if pr else ""
+        sp = " · đá phạt góc" if p.corners_and_indirect_freekicks_order == 1 else ""
+        lines.append(
+            f"- **{p.web_name}** ({t.short_name if t else '?'}, "
+            f"{_fmt_money(p.now_cost / 10)}){extra}{sp}"
+        )
+    lines += ["", "→ Đá penalty là một trong những yếu tố ổn định nhất để tăng điểm kỳ vọng."]
+    return _ok("\n".join(lines), players=[p.id for p in takers[:5]],
+               suggestions=["Ai nên làm đội trưởng?", "Tiền đạo nào tốt nhất?"])
+
+
+def _answer_value(db: Session) -> dict:
+    """Cầu thủ đáng tiền nhất (điểm trên mỗi triệu)."""
+    gw = planning_start_gw(db)
+    gws = list(range(gw, gw + 5))
+    hx = horizon_xp(db, gws)
+    projs = projections_for_gw(db, gw)
+    teams = team_lookup(db)
+    rows = []
+    for p in db.scalars(select(Player)).all():
+        pr = projs.get(p.id)
+        if not pr or pr.xmins < 45:
+            continue
+        xp5 = hx.get(p.id, 0.0)
+        if xp5 <= 0:
+            continue
+        rows.append((xp5 / (p.now_cost / 10), xp5, p, pr))
+    rows.sort(key=lambda r: -r[0])
+    if not rows:
+        return _no_data("chưa đủ dự báo")
+    lines = ["**Đáng tiền nhất — điểm kỳ vọng trên mỗi triệu (5 vòng):**", ""]
+    for i, (val, xp5, p, pr) in enumerate(rows[:8], 1):
+        t = teams.get(p.team_id)
+        lines.append(
+            f"{i}. **{p.web_name}** ({t.short_name if t else '?'}, "
+            f"{POS_VI.get(_pos_name(p.element_type), '')}, {_fmt_money(p.now_cost / 10)}) — "
+            f"**{val:.1f}** điểm/triệu · xP5 {xp5:.1f} · xMins {pr.xmins:.0f}′"
+        )
+    lines += [
+        "",
+        "→ Cầu thủ rẻ mà hiệu quả giúp dồn tiền cho vị trí premium. Đã lọc bỏ người "
+        "có xMins dưới 45′ để tránh 'rẻ vì không được đá'.",
+    ]
+    return _ok("\n".join(lines), players=[r[2].id for r in rows[:5]],
+               suggestions=["Ai là differential tốt?", "Hậu vệ nào giữ sạch lưới tốt?"])
+
+
+def _answer_ceiling(db: Session) -> dict:
+    """Cầu thủ có trần điểm cao / dễ ăn đậm."""
+    gw = planning_start_gw(db)
+    projs = projections_for_gw(db, gw)
+    teams = team_lookup(db)
+    players = {p.id: p for p in db.scalars(select(Player)).all()}
+    rows = [
+        (pr.mc_ceiling, pr, players[pid])
+        for pid, pr in projs.items()
+        if pid in players and pr.xmins >= 45
+    ]
+    rows.sort(key=lambda r: -r[0])
+    if not rows:
+        return _no_data("chưa đủ dự báo")
+    lines = [f"**Trần điểm cao nhất vòng {gw}** (mô phỏng Monte Carlo):", ""]
+    for i, (ceil, pr, p) in enumerate(rows[:8], 1):
+        t = teams.get(p.team_id)
+        lines.append(
+            f"{i}. **{p.web_name}** ({t.short_name if t else '?'}, "
+            f"{_fmt_money(p.now_cost / 10)}) — ceiling **{ceil:.0f}** · "
+            f"P(≥10đ) {round(pr.p_haul * 100)}% · xP {pr.xp:.1f} · "
+            f"P(tịt ngòi) {round(pr.p_blank * 100)}%"
+        )
+    lines += [
+        "",
+        "→ Ceiling cao hợp với người cần bứt phá thứ hạng, nhưng thường đi kèm "
+        "xác suất tịt ngòi cao hơn. Muốn an toàn thì nhìn xP và xMins.",
+    ]
+    return _ok("\n".join(lines), players=[r[2].id for r in rows[:5]],
+               suggestions=["Ai nên làm đội trưởng?", "Cầu thủ nào an toàn nhất?"])
+
+
+def _answer_safe(db: Session) -> dict:
+    """Lựa chọn an toàn: xMins cao, rủi ro thấp."""
+    gw = planning_start_gw(db)
+    gws = list(range(gw, gw + 5))
+    hx = horizon_xp(db, gws)
+    projs = projections_for_gw(db, gw)
+    teams = team_lookup(db)
+    players = {p.id: p for p in db.scalars(select(Player)).all()}
+    rows = [
+        (hx.get(pid, 0.0), pr, players[pid])
+        for pid, pr in projs.items()
+        if pid in players
+        and pr.overall_risk == "Low"
+        and pr.xmins >= 70
+        and players[pid].status == "a"
+    ]
+    rows.sort(key=lambda r: -r[0])
+    if not rows:
+        return _no_data("chưa có cầu thủ nào đạt mức rủi ro thấp")
+    lines = ["**Lựa chọn an toàn** (rủi ro Thấp, xMins ≥ 70′):", ""]
+    for i, (xp5, pr, p) in enumerate(rows[:8], 1):
+        t = teams.get(p.team_id)
+        lines.append(
+            f"{i}. **{p.web_name}** ({t.short_name if t else '?'}, "
+            f"{POS_VI.get(_pos_name(p.element_type), '')}, {_fmt_money(p.now_cost / 10)}) — "
+            f"xP5 **{xp5:.1f}** · xMins {pr.xmins:.0f}′ · tin cậy {round(pr.confidence * 100)}%"
+        )
+    return _ok("\n".join(lines), players=[r[2].id for r in rows[:5]],
+               suggestions=["Ai có ceiling cao nhất?", "Ai có nguy cơ bị xoay tua?"])
+
+
+def _answer_rotation_risk(db: Session) -> dict:
+    """Cầu thủ nổi tiếng nhưng có nguy cơ xoay tua / ít phút."""
+    gw = planning_start_gw(db)
+    projs = projections_for_gw(db, gw)
+    teams = team_lookup(db)
+    players = {p.id: p for p in db.scalars(select(Player)).all()}
+    rows = [
+        (players[pid].selected_by_percent, pr, players[pid])
+        for pid, pr in projs.items()
+        if pid in players
+        and players[pid].selected_by_percent >= 5
+        and (pr.minutes_risk in ("High", "Very High") or pr.xmins < 55)
+    ]
+    rows.sort(key=lambda r: -r[0])
+    if not rows:
+        return _ok("Hiện không có cầu thủ phổ biến nào bị gắn cờ rủi ro phút thi đấu cao.",
+                   suggestions=["Lựa chọn an toàn là ai?"])
+    lines = ["**Cảnh báo rủi ro phút thi đấu** (nhiều người sở hữu nhưng xMins thấp):", ""]
+    for own, pr, p in rows[:8]:
+        t = teams.get(p.team_id)
+        lines.append(
+            f"- **{p.web_name}** ({t.short_name if t else '?'}) — sở hữu {own:.1f}% · "
+            f"xMins {pr.xmins:.0f}′ · rủi ro phút {pr.minutes_risk} · xP {pr.xp:.1f}"
+        )
+    lines += ["", "→ Sở hữu cao không đảm bảo cầu thủ sẽ ra sân. Kiểm tra tin đội hình trước deadline."]
+    return _ok("\n".join(lines), players=[r[2].id for r in rows[:5]],
+               suggestions=["Lựa chọn an toàn là ai?", "Cầu thủ nào đang chấn thương?"])
+
+
+def _answer_ownership(db: Session) -> dict:
+    """Cầu thủ được sở hữu nhiều nhất (template)."""
+    gw = planning_start_gw(db)
+    projs = projections_for_gw(db, gw)
+    teams = team_lookup(db)
+    ps = sorted(db.scalars(select(Player)).all(), key=lambda p: -p.selected_by_percent)
+    lines = ["**Được sở hữu nhiều nhất (đội hình template):**", ""]
+    for i, p in enumerate(ps[:8], 1):
+        pr = projs.get(p.id)
+        t = teams.get(p.team_id)
+        lines.append(
+            f"{i}. **{p.web_name}** ({t.short_name if t else '?'}, {_fmt_money(p.now_cost / 10)}) — "
+            f"**{p.selected_by_percent:.1f}%**" + (f" · xP {pr.xp:.1f}" if pr else "")
+        )
+    lines += [
+        "",
+        "→ Sở hữu cao **không phải** bằng chứng cầu thủ tốt. Nó chỉ cho biết mức an toàn "
+        "về thứ hạng: bỏ qua một cầu thủ template là chấp nhận rủi ro tụt hạng nếu họ ghi điểm.",
+    ]
+    return _ok("\n".join(lines), players=[p.id for p in ps[:5]],
+               suggestions=["Ai là differential tốt?", "Ai đang được mua nhiều nhất?"])
+
+
+def _answer_trending(db: Session) -> dict:
+    """Cầu thủ đang được mua/bán nhiều nhất tuần này."""
+    gw = planning_start_gw(db)
+    projs = projections_for_gw(db, gw)
+    teams = team_lookup(db)
+    ps = db.scalars(select(Player)).all()
+    ins = sorted(ps, key=lambda p: -p.transfers_in_event)[:6]
+    outs = sorted(ps, key=lambda p: -p.transfers_out_event)[:6]
+
+    def fmt(p):
+        pr = projs.get(p.id)
+        t = teams.get(p.team_id)
+        return (f"- **{p.web_name}** ({t.short_name if t else '?'}) — "
+                f"{p.transfers_in_event / 1000:.0f}k lượt" +
+                (f" · xP {pr.xp:.1f}" if pr else ""))
+
+    lines = ["**Được mua nhiều nhất tuần này:**", ""]
+    lines += [fmt(p) for p in ins]
+    lines += ["", "**Bị bán nhiều nhất:**", ""]
+    lines += [
+        f"- **{p.web_name}** ({teams[p.team_id].short_name}) — "
+        f"{p.transfers_out_event / 1000:.0f}k lượt"
+        for p in outs
+    ]
+    lines += [
+        "",
+        "→ Đây là dòng chuyển nhượng của đám đông, **không phải** khuyến nghị. "
+        "Hãy đối chiếu với cột xP trước khi chạy theo.",
+    ]
+    return _ok("\n".join(lines), players=[p.id for p in ins[:5]],
+               suggestions=["Cầu thủ nào đáng tiền nhất?", "Ai nên làm đội trưởng?"])
+
+
+def _answer_clean_sheet(db: Session) -> dict:
+    """Hậu vệ / thủ môn có xác suất giữ sạch lưới tốt nhất."""
+    gw = planning_start_gw(db)
+    projs = projections_for_gw(db, gw)
+    teams = team_lookup(db)
+    players = {p.id: p for p in db.scalars(select(Player)).all()}
+    rows = [
+        (pr.clean_sheet_prob, pr, players[pid])
+        for pid, pr in projs.items()
+        if pid in players and players[pid].element_type in (1, 2) and pr.xmins >= 60
+    ]
+    rows.sort(key=lambda r: (-r[0], -r[1].xp))
+    if not rows:
+        return _no_data("chưa đủ dự báo phòng ngự")
+    lines = [f"**Cơ hội giữ sạch lưới tốt nhất vòng {gw}:**", ""]
+    seen_team = set()
+    shown = 0
+    for cs, pr, p in rows:
+        if p.team_id in seen_team and shown >= 4:
+            continue
+        seen_team.add(p.team_id)
+        t = teams.get(p.team_id)
+        lines.append(
+            f"- **{p.web_name}** ({t.short_name if t else '?'}, "
+            f"{POS_VI.get(_pos_name(p.element_type), '')}, {_fmt_money(p.now_cost / 10)}) — "
+            f"sạch lưới **{round(cs * 100)}%** · xP {pr.xp:.1f} · xMins {pr.xmins:.0f}′"
+        )
+        shown += 1
+        if shown >= 8:
+            break
+    return _ok("\n".join(lines), players=[r[2].id for r in rows[:5]],
+               suggestions=["Đội nào có lịch dễ?", "Thủ môn nào tốt nhất?"])
+
+
+def _answer_blank_double(db: Session) -> dict:
+    """Blank / Double gameweek sắp tới."""
+    from app.services.common import blank_double_gws
+
+    start = planning_start_gw(db)
+    bd = blank_double_gws(db, start, start + 8)
+    teams = team_lookup(db)
+    if not bd:
+        return _ok(
+            f"Từ vòng {start} đến {start + 8} **chưa ghi nhận** Blank hay Double Gameweek nào. "
+            "Lịch có thể thay đổi khi các giải cúp xác định lịch đá lại — hệ thống sẽ tự cập nhật.",
+            suggestions=["Đội nào có lịch dễ?", "Ai nên làm đội trưởng?"],
+        )
+    lines = ["**Blank & Double Gameweek sắp tới:**", ""]
+    for gw, v in sorted(bd.items()):
+        if v.get("double"):
+            names = ", ".join(teams[t].short_name for t in v["double"] if t in teams)
+            lines.append(f"- **GW{gw} — Double:** {names}")
+        if v.get("blank"):
+            names = ", ".join(teams[t].short_name for t in v["blank"] if t in teams)
+            lines.append(f"- **GW{gw} — Blank (nghỉ):** {names}")
+    lines += ["", "→ Double Gameweek là thời điểm hợp lý để cân nhắc Bench Boost / Triple Captain; "
+                  "Blank Gameweek thường dùng Free Hit."]
+    return _ok("\n".join(lines), suggestions=["Free Hit nên chọn ai?", "Đội nào có lịch dễ?"])
+
+
+def _answer_optimal_xi(db: Session) -> dict:
+    """Đội hình tối ưu trong ngân sách (dùng chính bộ tối ưu của Free Hit Lab)."""
+    from app.services import team as team_svc
+
+    try:
+        res = team_svc.optimize_free_hit(db, budget=1000, mode="max_ep")
+    except Exception:
+        return _no_data("bộ tối ưu chưa chạy được lúc này")
+    if not res.get("starting"):
+        return _no_data("chưa dựng được đội hình")
+
+    by_pos: dict[str, list[str]] = {}
+    for s in res["starting"]:
+        by_pos.setdefault(s["position"], []).append(
+            f"{s['name']} ({s['team']} {_fmt_money(s['price'])}"
+            + (", **C**" if s.get("is_captain") else "")
+            + f", xP {s['xp']:.1f})"
+        )
+    lines = [
+        f"**Đội hình tối ưu vòng {res['gameweek']}** — sơ đồ {res['formation']}, "
+        f"tổng {_fmt_money(res['total_cost'])}, xP đội hình chính **{res['xi_xp']:.1f}**",
+        "",
+    ]
+    for pos in ("GK", "DEF", "MID", "FWD"):
+        if pos in by_pos:
+            lines.append(f"- **{POS_VI[pos].title()}:** " + "; ".join(by_pos[pos]))
+    bench = ", ".join(f"{b['name']} ({b['team']})" for b in res.get("bench", []))
+    if bench:
+        lines += ["", f"*Dự bị:* {bench}"]
+    lines += [
+        "",
+        "→ Tối ưu bằng quy hoạch nguyên, tuân thủ đủ luật FPL (£100m, 2/5/5/3, tối đa 3 "
+        "cầu thủ mỗi CLB). Vào **Free Hit Lab** để đổi ngân sách và chế độ (an toàn / mạo hiểm).",
+    ]
+    return _ok("\n".join(lines), players=[s["id"] for s in res["starting"][:5]],
+               suggestions=["Ai nên làm đội trưởng?", "Cầu thủ nào đáng tiền nhất?"])
+
+
+def _answer_rules(db: Session, question: str) -> dict:
+    """Giải thích luật tính điểm mùa hiện tại (đọc từ cấu hình, không viết cứng)."""
+    from app.scoring import RULES, SEASON
+
+    q = _norm(question)
+    if _has(q, "defensive contribution", "defcon", "dong gop phong ngu"):
+        return _ok(
+            f"**Defensive Contribution** (luật mới mùa {SEASON}): cầu thủ được "
+            f"**+{RULES.defcon_points} điểm** khi đạt ngưỡng hành động phòng ngự trong trận.\n\n"
+            f"- Hậu vệ: **{RULES.defcon_threshold_def}** lần (phá bóng, cản phá, cắt bóng, tắc bóng)\n"
+            f"- Tiền vệ & tiền đạo: **{RULES.defcon_threshold_att}** lần (tính thêm cả thu hồi bóng)\n\n"
+            "Mô hình đã tính hạng mục này vào xP — xem cột phân rã ở trang chi tiết cầu thủ.",
+            suggestions=["Luật tính điểm thế nào?", "Hậu vệ nào giữ sạch lưới tốt?"],
+        )
+    g = RULES.goal_points
+    cs = RULES.clean_sheet_points
+    return _ok(
+        f"**Luật tính điểm FPL mùa {SEASON}:**\n\n"
+        f"- Ra sân dưới 60′: **+{RULES.points_play_under_60}** · từ 60′ trở lên: **+{RULES.points_play_60_plus}**\n"
+        f"- Ghi bàn: thủ môn/hậu vệ **+{g[1]}**, tiền vệ **+{g[3]}**, tiền đạo **+{g[4]}**\n"
+        f"- Kiến tạo: **+{RULES.assist_points}**\n"
+        f"- Sạch lưới (cần 60′): thủ môn/hậu vệ **+{cs[1]}**, tiền vệ **+{cs[3]}**\n"
+        f"- Thủ môn: cứ {RULES.saves_per_point} lần cứu thua **+1**, cản penalty **+{RULES.penalty_save_points}**\n"
+        f"- Thủ môn/hậu vệ thủng lưới: cứ 2 bàn **{RULES.points_per_two_conceded}**\n"
+        f"- Thẻ vàng **{RULES.yellow_card_points}** · thẻ đỏ **{RULES.red_card_points}** · "
+        f"phản lưới **{RULES.own_goal_points}** · hỏng penalty **{RULES.penalty_miss_points}**\n"
+        f"- Điểm thưởng: tối đa **+{RULES.max_bonus}** mỗi trận\n"
+        f"- **Defensive Contribution: +{RULES.defcon_points}** (luật mới)\n\n"
+        "Toàn bộ hạng mục trên đều được tính trong mô hình xP.",
+        suggestions=["Defensive Contribution là gì?", "Ai nên làm đội trưởng?"],
+    )
+
+
+def _answer_howto(db: Session) -> dict:
+    """Hướng dẫn dùng web / nhập Team ID."""
+    return _ok(
+        "**Cách dùng FPL Edge VN:**\n\n"
+        "- **Đội của tôi:** nhập FPL Team ID để tải đội hình. Tìm ID trong URL trang "
+        "*Points* trên fantasy.premierleague.com — dãy số sau `/entry/`.\n"
+        "- **Free Hit Lab:** dựng đội hình tối ưu cho một vòng, 3 chế độ an toàn / cân bằng / mạo hiểm.\n"
+        "- **Kế hoạch dài hạn:** lập kế hoạch chuyển nhượng 3–8 vòng với 3 chiến lược.\n"
+        "- **Cầu thủ:** lọc theo đội, vị trí, giá; bấm tiêu đề cột để sắp xếp cao ↔ thấp.\n"
+        "- **Lịch thi đấu:** độ khó riêng cho tấn công và phòng ngự; ô có dấu • là dựa trên kèo nhà cái.\n\n"
+        "*Lưu ý:* FPL chỉ công khai đội hình sau hạn chót mỗi vòng, nên trước deadline đầu tiên "
+        "trang **Đội của tôi** chưa tải được squad.",
+        suggestions=["Khi nào tới hạn chót?", "Đội hình tối ưu là gì?"],
+    )
+
+
+def _pos_name(element_type: int) -> str:
+    return {1: "GK", 2: "DEF", 3: "MID", 4: "FWD"}.get(element_type, "")
+
+
 def _answer_help() -> dict:
     return _ok(
         "Mình trả lời dựa trên đúng số liệu của web (xP, xMins, lịch, kèo nhà cái). "
         "Bạn có thể hỏi kiểu:\n\n"
+        "**Chọn người**\n"
         "- *Ai nên làm đội trưởng?*\n"
         "- *Haaland có nên mua không?*\n"
         "- *So sánh Saka và Palmer*\n"
         "- *Tiền đạo nào tốt nhất dưới 7 triệu?*\n"
-        "- *Đội nào có lịch dễ?*\n"
-        "- *Ai là differential tốt?*\n"
+        "- *Cầu thủ Arsenal nào tốt nhất?*\n\n"
+        "**Chiến thuật**\n"
+        "- *Đội hình tối ưu là gì?*\n"
+        "- *Cầu thủ nào đáng tiền nhất?*\n"
+        "- *Ai có ceiling cao nhất?*\n"
+        "- *Lựa chọn an toàn là ai?*\n"
+        "- *Ai là differential tốt?*\n\n"
+        "**Thông tin**\n"
+        "- *Lịch Man City thế nào?*\n"
+        "- *Ai đá penalty?*\n"
+        "- *Hậu vệ nào giữ sạch lưới tốt?*\n"
+        "- *Ai đang được mua nhiều nhất?*\n"
+        "- *Ai có nguy cơ bị xoay tua?*\n"
         "- *Cầu thủ nào đang chấn thương?*\n"
-        "- *Khi nào tới hạn chót?*",
-        suggestions=["Ai nên làm đội trưởng?", "Đội nào có lịch dễ?", "Ai là differential tốt?"],
+        "- *Có Double Gameweek nào không?*\n"
+        "- *Defensive Contribution là gì?*\n"
+        "- *Khi nào tới hạn chót?*\n"
+        "- *Cách dùng web này?*",
+        suggestions=[
+            "Ai nên làm đội trưởng?",
+            "Đội hình tối ưu là gì?",
+            "Cầu thủ nào đáng tiền nhất?",
+        ],
     )
 
 
@@ -401,8 +890,18 @@ def answer_question(db: Session, question: str) -> dict:
     if not q:
         return _answer_help()
 
-    if _has(q, "giup", "help", "lam gi", "hoi gi", "huong dan"):
-        return _answer_help()
+    if _has(q, "giup", "help", "hoi gi", "cach dung", "su dung web", "team id o dau"):
+        return _answer_howto(db) if _has(q, "cach dung", "su dung web", "team id") else _answer_help()
+
+    # luật tính điểm
+    if _has(q, "luat", "tinh diem", "defensive contribution", "defcon", "duoc may diem",
+            "bao nhieu diem", "quy dinh"):
+        return _answer_rules(db, question)
+
+    # blank / double gameweek
+    if _has(q, "double gameweek", "blank gameweek", " dgw", " bgw", "double gw", "blank gw",
+            "da hai tran", "nghi vong"):
+        return _answer_blank_double(db)
 
     # deadline / gameweek
     if _has(q, "deadline", "han chot", "khi nao", "vong may", "gameweek nao"):
@@ -412,6 +911,43 @@ def answer_question(db: Session, question: str) -> dict:
     if _has(q, "chan thuong", "injur", "treo gio", "suspend", "vang mat"):
         return _answer_news(db)
 
+    # rủi ro xoay tua
+    if _has(q, "xoay tua", "rotation", "rui ro phut", "it phut", "co the khong da"):
+        return _answer_rotation_risk(db)
+
+    # lựa chọn an toàn
+    if _has(q, "an toan", "safe", "chac suat", "on dinh", "it rui ro"):
+        return _answer_safe(db)
+
+    # ceiling / haul
+    if _has(q, "ceiling", "tran diem", "an dam", "haul", "bung no", "diem cao nhat"):
+        return _answer_ceiling(db)
+
+    # penalty / set-piece
+    if _has(q, "penalty", "phat den", "da pen", "set piece", "phat goc", "da phat"):
+        return _answer_penalties(db)
+
+    # giá trị / đáng tiền
+    if _has(q, "dang tien", "gia tri", "value", "re ma tot", "diem tren moi trieu",
+            "tiet kiem", "gia re"):
+        return _answer_value(db)
+
+    # sạch lưới
+    if _has(q, "sach luoi", "clean sheet", "giu sach", " cs "):
+        return _answer_clean_sheet(db)
+
+    # ownership / template
+    if _has(q, "so huu nhieu", "ownership", "template", "nhieu nguoi chon", "pho bien"):
+        return _answer_ownership(db)
+
+    # xu hướng chuyển nhượng
+    if _has(q, "mua nhieu", "ban nhieu", "trending", "dang duoc mua", "chuyen nhuong nhieu"):
+        return _answer_trending(db)
+
+    # đội hình tối ưu
+    if _has(q, "doi hinh toi uu", "toi uu", "free hit", "wildcard", "xay doi", "doi hinh tot nhat"):
+        return _answer_optimal_xi(db)
+
     # captain
     if _has(q, "doi truong", "captain", "cap ", " c "):
         return _answer_captain(db)
@@ -420,12 +956,23 @@ def answer_question(db: Session, question: str) -> dict:
     if _has(q, "differential", "it nguoi", "khac biet", "dif "):
         return _answer_differential(db)
 
-    # fixtures
-    if _has(q, "lich thi dau", "lich dep", "lich de", "fixture", "doi nao de"):
-        return _answer_fixtures(db)
-
+    # Tên cầu thủ được ưu tiên hơn tên đội: hỏi "Saka của Arsenal thế nào" thì
+    # người dùng muốn biết về cầu thủ, không phải về cả đội.
     players = find_players(db, question)
     wants_compare = _has(q, "so sanh", " vs ", " hay ", "compare", " or ")
+
+    if not players:
+        # hỏi về một đội cụ thể
+        team_id = _find_team(db, question)
+        if team_id:
+            if _has(q, "lich", "fixture", "gap ai", "doi thu"):
+                return _answer_team_fixtures(db, team_id)
+            if _has(q, "cau thu", "nen mua", "tot nhat", "ai", "player", "dang mua"):
+                return _answer_team_players(db, team_id)
+
+    # fixtures chung
+    if _has(q, "lich thi dau", "lich dep", "lich de", "fixture", "doi nao de"):
+        return _answer_fixtures(db)
 
     if len(players) >= 2 and wants_compare:
         return _answer_compare(db, players[:3])

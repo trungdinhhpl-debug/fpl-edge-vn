@@ -65,3 +65,55 @@ def test_answer_never_empty(db):
     for q in ["", "  ", "giúp mình với", "so sánh"]:
         res = answer_question(db, q)
         assert res["answer"].strip()
+
+
+# ------------------------------------------------ các dạng câu hỏi mở rộng ----
+def test_new_intents_are_recognised(db):
+    """Mỗi dạng câu hỏi mới phải ra đúng chủ đề, không rơi về trợ giúp."""
+    cases = [
+        ("Ai đá penalty?", ("phạt đền", "penalty")),
+        ("Cầu thủ nào đáng tiền nhất?", ("Đáng tiền", "điểm/triệu")),
+        ("Ai có ceiling cao nhất?", ("Trần điểm", "ceiling")),
+        ("Lựa chọn an toàn là ai?", ("an toàn", "rủi ro")),
+        ("Hậu vệ nào giữ sạch lưới tốt?", ("sạch lưới",)),
+        ("Cầu thủ nào nhiều người chọn nhất?", ("sở hữu", "template")),
+        ("Ai đang được mua nhiều nhất?", ("mua nhiều",)),
+        ("Có Double Gameweek nào không?", ("Gameweek", "Blank", "Double")),
+        ("Luật tính điểm thế nào?", ("Luật tính điểm",)),
+        ("Defensive Contribution là gì?", ("Defensive Contribution",)),
+        ("Cách dùng web này?", ("Cách dùng", "Team ID")),
+    ]
+    for question, needles in cases:
+        answer = answer_question(db, question)["answer"]
+        assert any(n in answer for n in needles), f"{question} -> {answer[:80]}"
+
+
+def test_common_vietnamese_words_not_read_as_team_codes(db):
+    """"tốt" bỏ dấu thành "tot" trùng mã Tottenham — không được cướp ý định."""
+    answer = answer_question(db, "Tiền đạo nào tốt nhất dưới 7 triệu?")["answer"]
+    assert "tiền đạo" in answer.lower()
+    assert "£7.0m" in answer
+    assert "Spurs" not in answer
+
+
+def test_team_specific_questions(db):
+    from app.models import Team
+
+    team = db.scalars(select(Team)).first()
+    players_ans = answer_question(db, f"Cầu thủ {team.name} nào tốt nhất?")["answer"]
+    fixtures_ans = answer_question(db, f"Lịch {team.name} thế nào?")["answer"]
+    assert team.name in players_ans or "chưa" in players_ans
+    assert team.name in fixtures_ans or "chưa" in fixtures_ans
+
+
+def test_player_name_beats_team_name(db):
+    """Hỏi kèm cả tên cầu thủ lẫn tên đội thì trả lời về cầu thủ."""
+    from app.models import Player, Team
+
+    p = db.scalars(
+        select(Player).where(Player.minutes > 0).order_by(Player.total_points.desc())
+    ).first()
+    team = db.get(Team, p.team_id)
+    answer = answer_question(db, f"{p.web_name} của {team.name} thế nào?")["answer"]
+    assert p.web_name in answer
+    assert "xP" in answer

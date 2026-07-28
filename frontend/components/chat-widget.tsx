@@ -12,15 +12,44 @@ type Msg = {
   suggestions?: string[];
 };
 
+/** Gợi ý xoay vòng để người dùng thấy được nhiều dạng câu hỏi khác nhau. */
+const SUGGESTION_POOL = [
+  "Ai nên làm đội trưởng?",
+  "Đội hình tối ưu là gì?",
+  "Cầu thủ nào đáng tiền nhất?",
+  "Ai có ceiling cao nhất?",
+  "Lựa chọn an toàn là ai?",
+  "Ai là differential tốt?",
+  "Ai đá penalty?",
+  "Hậu vệ nào giữ sạch lưới tốt?",
+  "Đội nào có lịch dễ?",
+  "Cầu thủ Arsenal nào tốt nhất?",
+  "Lịch Man City thế nào?",
+  "Ai có nguy cơ bị xoay tua?",
+  "Ai đang được mua nhiều nhất?",
+  "Cầu thủ nào đang chấn thương?",
+  "Có Double Gameweek nào không?",
+  "Defensive Contribution là gì?",
+  "Tiền đạo nào tốt nhất dưới 7 triệu?",
+  "Cách dùng web này?",
+];
+
+function pickSuggestions(n = 3): string[] {
+  const pool = [...SUGGESTION_POOL];
+  const out: string[] = [];
+  while (out.length < n && pool.length) {
+    out.push(pool.splice(Math.floor(Math.random() * pool.length), 1)[0]);
+  }
+  return out;
+}
+
 const GREETING: Msg = {
   role: "bot",
   text:
-    "Chào bạn 👋 Mình trả lời dựa trên **đúng số liệu** của web (xP, xMins, lịch thi đấu, kèo nhà cái) — không phán bừa.\n\nBạn muốn hỏi gì?",
-  suggestions: [
-    "Ai nên làm đội trưởng?",
-    "Đội nào có lịch dễ?",
-    "Tiền đạo nào tốt nhất dưới 7 triệu?",
-  ],
+    "Chào bạn 👋 Mình trả lời dựa trên **đúng số liệu** của web (xP, xMins, lịch thi đấu, kèo nhà cái) — không phán bừa.\n\n" +
+    "Hỏi được về: đội trưởng · so sánh cầu thủ · đội hình tối ưu · giá trị · ceiling · differential · " +
+    "penalty · sạch lưới · lịch từng đội · chấn thương · luật tính điểm.\n\nThử vài câu bên dưới nhé:",
+  suggestions: [],
 };
 
 /** Quả bóng đá vẽ bằng SVG (nét sắc ở mọi kích thước, không phụ thuộc emoji hệ điều hành). */
@@ -99,6 +128,15 @@ export function ChatWidget() {
   useEffect(() => {
     if (open) endRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [msgs, open]);
+
+  // chọn gợi ý sau khi mount (tránh lệch nội dung giữa máy chủ và trình duyệt)
+  useEffect(() => {
+    setMsgs((m) =>
+      m.length === 1 && m[0].role === "bot" && !m[0].suggestions?.length
+        ? [{ ...m[0], suggestions: pickSuggestions(4) }]
+        : m,
+    );
+  }, []);
 
   async function ask(question: string) {
     const q = question.trim();
