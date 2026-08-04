@@ -131,6 +131,41 @@ def test_accuracy_appears_only_past_the_sample_floor(db):
         db.flush()
 
 
+def test_verified_flag_is_derived_not_trusted_from_the_row(db):
+    """A stale `verified=True` in the database must not reach the page.
+
+    Live databases still carry that flag for real named people from the previous
+    version, so the payload computes it from scored evidence instead of reading
+    the column.
+    """
+    src = db.scalar(select(ExpertSource).where(ExpertSource.name == "Ben Crellin"))
+    original = src.verified_track_record
+    src.verified_track_record = True          # simulate the stale production row
+    db.flush()
+    try:
+        payload = expert_consensus(db)
+        row = next(s for s in payload["sources"] if s["name"] == "Ben Crellin")
+        assert row["verified_track_record"] is False, (
+            "verified must follow the evidence, not a leftover flag"
+        )
+    finally:
+        src.verified_track_record = original
+        db.flush()
+
+
+def test_unmeasured_accuracy_does_not_zero_signal_scores():
+    """Regression: 0.0 accuracy multiplied every signal score down to zero.
+
+    "Not measured" and "always wrong" must not produce the same number.
+    """
+    from app.providers.expert_provider import compute_signal_score
+
+    unmeasured = compute_signal_score(0.75, 0.0, 1.0, 0.85, 8)
+    assert unmeasured > 0
+    measured_bad = compute_signal_score(0.75, 0.1, 1.0, 0.85, 8)
+    assert measured_bad < unmeasured
+
+
 def test_weight_uses_domain_not_volume(db):
     """Opining outside your declared domain counts for less."""
     src = db.scalar(select(ExpertSource).where(ExpertSource.name == "Fantasy Football Scout"))

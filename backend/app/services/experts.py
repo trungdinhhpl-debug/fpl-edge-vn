@@ -243,8 +243,14 @@ def _source_payload(s: ExpertSource, record: dict | None) -> dict:
         "reliability_basis": "Tiên nghiệm theo LOẠI nguồn, không phải hiệu suất cá nhân.",
         "independence": s.independence,
         "expertise": per_domain,
-        # Verified only when we hold evidence for it — never asserted from a seed.
-        "verified_track_record": bool(s.verified_track_record),
+        # DERIVED, never read from the stored flag. "Verified" has to mean we
+        # hold scored evidence, and a boolean sitting in a row can be left over
+        # from an older seed — live databases still carry `verified=True` for
+        # real named people from the previous version. Computing it here means
+        # the claim cannot outlive the evidence, with no migration needed.
+        "verified_track_record": any(
+            d["accuracy"] is not None for d in per_domain
+        ),
         "fpl_rank_verified": None,
         "fpl_rank_note": ("FPL không công khai API xác thực thứ hạng của một tài "
                           "khoản bên thứ ba, nên mục này để trống thay vì chép lại "

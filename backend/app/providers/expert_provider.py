@@ -117,11 +117,17 @@ def compute_signal_score(
     specificity: float,
     published_hours_ago: float,
 ) -> float:
-    """recency decays with a ~48h half-life; nearer-deadline news counts more."""
+    """recency decays with a ~48h half-life; nearer-deadline news counts more.
+
+    An UNMEASURED accuracy (0.0) is treated as neutral, not as a measured zero.
+    Sources now start at 0.0 until they have earned a score, and multiplying by
+    that would drive every signal score to 0 — silently collapsing the ordering
+    in the player detail view. "We have not measured this" and "this source is
+    always wrong" must not produce the same number.
+    """
     recency = math.exp(-published_hours_ago / 48.0)
-    return round(
-        reliability * recency * specificity * historical_accuracy * independence, 4
-    )
+    accuracy = historical_accuracy if historical_accuracy > 0 else 1.0
+    return round(reliability * recency * specificity * accuracy * independence, 4)
 
 
 class ExpertProvider:
