@@ -19,6 +19,7 @@ from app.optimizer import (
     pick_best_xi,
 )
 from app.models import Player, PlayerProjection
+from app.services.decision_tree import build_decision_tree
 from app.services.common import (
     horizon_xp,
     planning_start_gw,
@@ -302,6 +303,12 @@ def optimize_long_term(db: Session, squad_ids: list[int], bank: int = 0,
             w["captain_detail"] = hydrate(db, [w["captain"]] if w["captain"] else [], w["gameweek"])
         plan["risk_profile"] = name
         plan["summary"] = _plan_summary(name, plan)
+        # A list of moves does not tell a manager why holding beats acting now;
+        # the tree prices that decision. Pure arithmetic on the solved plan, so
+        # it adds no solver time.
+        plan["decision_tree"] = build_decision_tree(
+            db, plan, gws, bank=bank, free_transfers=free_transfers
+        )
         plans[name] = plan
     return {"gameweeks": gws, "plans": plans, "current_squad_size": len(squad_ids)}
 

@@ -1,9 +1,10 @@
 "use client";
 import { useEffect, useState } from "react";
-import { CalendarRange, ArrowRight } from "lucide-react";
+import { CalendarRange } from "lucide-react";
 import { postJSON } from "@/lib/api";
 import { useT } from "@/lib/i18n";
-import { Card, CardContent, CardHeader, CardTitle, Button, Input, Select, Spinner, ErrorBox, Badge, Stat } from "@/components/ui";
+import { Card, CardContent, CardHeader, CardTitle, Button, Input, Select, Spinner, ErrorBox, Badge } from "@/components/ui";
+import { DecisionTree } from "@/components/decision-tree";
 import { fmt } from "@/lib/format";
 
 const PROFILES = [
@@ -116,37 +117,7 @@ export default function PlannerPage() {
                 <p className="rounded-md bg-muted/50 p-2 text-sm">
                   <b>Rủi ro chính:</b> {plan.summary.main_risk}
                 </p>
-                <div className="space-y-2">
-                  {plan.weeks.map((w: any) => (
-                    <div key={w.gameweek} className="rounded-md border p-3">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <Badge className="bg-primary/10 text-primary">GW{w.gameweek}</Badge>
-                        <span className="text-sm text-muted-foreground">XI xP {fmt(w.xi_xp)} · FT {fmt(w.free_transfers)}</span>
-                        {w.hits > 0 && <Badge className="bg-danger/15 text-danger">-{w.hits * 4}đ hit</Badge>}
-                      </div>
-                      {w.n_transfers > 0 ? (
-                        <div className="mt-2 space-y-1">
-                          {w.transfers_out_detail?.map((o: any, i: number) => {
-                            const inp = w.transfers_in_detail?.[i];
-                            return (
-                              <div key={i} className="flex items-center gap-2 text-sm">
-                                <Badge className="bg-danger/15 text-danger">OUT</Badge> {o.name}
-                                <ArrowRight className="h-3.5 w-3.5" />
-                                <Badge className="bg-positive/15 text-positive">IN</Badge> {inp?.name ?? "?"}
-                                {inp && <span className="ml-auto text-xs text-muted-foreground">xP {fmt(inp.xp)}</span>}
-                              </div>
-                            );
-                          })}
-                        </div>
-                      ) : (
-                        <p className="mt-1 text-xs text-muted-foreground">Giữ đội hình (roll transfer).</p>
-                      )}
-                      {w.captain_detail?.[0] && (
-                        <p className="mt-1 text-xs">👑 Captain: <b>{w.captain_detail[0].name}</b> (xP {fmt(w.captain_detail[0].xp)})</p>
-                      )}
-                    </div>
-                  ))}
-                </div>
+                <DecisionTree plan={plan} tree={plan.decision_tree} />
               </CardContent>
             </Card>
           )}

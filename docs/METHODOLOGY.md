@@ -150,6 +150,43 @@ s.t. chuyển trạng thái own[p,t] − own[p,t−1] = tin − tout
 Ba chiến lược **safe/balanced/aggressive** khác nhau ở `risk_weight`,
 `ceiling_weight`, `discount`, `max_hits`. Universe rút gọn (current squad + top N/vị trí) để giải nhanh; CBC có time limit.
 
+### 5b. Cây quyết định (`services/decision_tree.py`)
+
+Một danh sách "GW4: C + D → E + F" chưa phải kế hoạch dùng được: nó nói làm gì
+nhưng không nói **vì sao chờ lại hơn làm ngay**, và ngầm giả định từ giờ tới GW4
+không có gì thay đổi. Kết quả tối ưu vì thế được dịch thành cây:
+
+**Nhánh chính** — mỗi bước, đặc biệt mỗi bước Roll, kèm lý do có số. Con số cốt
+lõi là **chi phí của việc hành động ngay**: giả sử kéo nước đi kế tiếp lên vòng
+hiện tại thì được gì và mất gì.
+
+```
+lợi  = Σ (xP cầu thủ vào − xP cầu thủ ra) trên các vòng từ t đến m−1
+phí  = 4 × (số hit phát sinh về sau, tính lại bằng CHÍNH luật FT của bài toán)
+ròng = lợi − phí
+```
+
+Vì bài toán tối ưu đã chọn lịch tốt nhất, `ròng` thường âm — và chính con số âm
+đó, tách làm hai vế, là lời giải thích. Khi `ròng` không âm thì nghĩa là việc
+tích FT **không** phải điều đang chi phối; lúc đó cây nói thẳng như vậy thay vì
+bịa ra một lý do. Nước đi rơi vào vòng cuối tầm nhìn được gắn cờ `horizon_edge`
+vì lợi ích của nó chỉ tính được đúng một vòng.
+
+**Nhánh điều kiện** — chỉ sinh ra khi dữ liệu thật sự có tín hiệu:
+
+| Nhánh | Kích hoạt bởi | Đưa ra |
+|---|---|---|
+| `injury` | `status ≠ a`, `chance_of_playing < 100`, hoặc có `injury_reports` | 2 phương án thay thế cùng vị trí, đủ tiền trong suất của cầu thủ bán, kèm chênh lệch xP so với nhánh chính |
+| `price_rise` | Chuyển nhượng ròng vào ≥ 25k trong vòng | Khuyến nghị làm sớm, kèm thời điểm đổi giá và cái giá phải trả (mất phần FT đang tích) |
+| `price_fall` | Chuyển nhượng ròng ra ≥ 25k | Bán sớm giữ giá trị đội, kèm phần xP sẽ mất |
+
+Ngưỡng đổi giá thật của FPL **không công khai** và phụ thuộc tỷ lệ sở hữu, nên
+nhánh giá luôn gắn nhãn tin cậy Low/Medium và một câu cảnh báo rõ đây là **chỉ
+báo động lượng, không phải dự báo**.
+
+Toàn bộ phần này là số học trên kế hoạch đã giải — không giải MILP lần hai, nên
+không tốn thêm thời gian xử lý.
+
 ## 6. Backtest & chống data leakage (spec §18)
 
 - Dự báo GW *t* chỉ dùng dữ liệu có **trước deadline** GW *t* (`data_cutoff`).
