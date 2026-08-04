@@ -13,7 +13,7 @@ from app.services.chat import answer_question
 from app.services.common import planning_start_gw, team_lookup
 from app.services.fixtures import fixture_ticker
 from app.services.gameweek import dashboard, gameweek_status
-from app.services.news import expert_consensus, news_feed
+from app.services.news import expert_consensus, news_centre, news_feed
 from app.services.players import compare_players, list_players, player_detail
 
 router = APIRouter()
@@ -114,9 +114,10 @@ def get_captain_compare(a: int, b: int, gameweek: int | None = None,
 
 
 @router.get("/news")
-def get_news(impact: str | None = None, limit: int = 100,
+def get_news(impact: str | None = None, tier: str | None = None,
+             limit: int = 100,
              db: Session = Depends(get_db)) -> dict:
-    return {"news": news_feed(db, impact, limit)}
+    return news_centre(db, impact=impact, tier=tier, limit=limit)
 
 
 @router.get("/expert-consensus")

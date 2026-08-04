@@ -244,6 +244,48 @@ các trận gần nhất mà cầu thủ có đá chính, nếu chưa đủ mẫ
 mỗi lần đá chính của cả mùa, và chỉ khi không có gì mới rơi về mức nền của giải
 (có ghi rõ nguồn suy ra). Chỉ số này cũng nuôi lại phần clean sheet trong xP.
 
+## 5d. Tin tức → hành động (`services/news_tiers.py`)
+
+Bộ lọc mức độ (Critical/High/…) chỉ trả lời "nặng cỡ nào", không trả lời "nên
+tin đến đâu" và "giờ phải làm gì". Hai thứ biến bảng tin thành quyết định:
+
+**1. Nguồn gốc.** Sáu tầng theo mức trực tiếp của bằng chứng — xem
+DATA_SOURCES. Thông cáo CLB và tin đồn không phải cùng một loại bằng chứng, xếp
+ngang nhau là cách một trang tin đánh lừa người đọc.
+
+**2. Nó làm thay đổi cái gì.** Con số quan trọng là thay đổi phút thi đấu kỳ
+vọng, vì đó là thứ lan vào xP rồi thành quyết định giữ/bán.
+
+```
+xMins_trước = estimate_minutes(status='a',   chance=None,   …cùng đầu vào)
+xMins_sau   = estimate_minutes(status=thật,  chance=thật,   …cùng đầu vào)
+```
+
+`xMins_trước` là **phản thực**, không phải giá trị nhớ lại: mô hình phút thi đấu
+là hàm thuần của tình trạng sẵn sàng + phong độ, nên chạy hai lần trên cùng đầu
+vào và chỉ đổi tình trạng thì chênh lệch **đúng bằng** phần do tin này gây ra.
+Cách này chạy được ngay ở lần đồng bộ đầu tiên sau khi tin nổ, không phải chờ
+lần chạy mô hình thứ hai để so.
+
+Khuyến nghị đặt ngưỡng theo **mức giảm tương đối**, không theo mức tuyệt đối:
+một cầu thủ dự bị mất 20′ là nhiễu, một trụ cột mất 20′ là chuyện lớn.
+
+| Mức giảm | Khuyến nghị |
+|---|---|
+| Chắc chắn vắng / xMins < 15 | Giữ → **Bán** |
+| ≥ 45% | Giữ → **Bán** |
+| ≥ 25% | Giữ → **Cân nhắc bán** |
+| ≥ 10% | Giữ → **Theo dõi** |
+| < 10% | Giữ |
+
+**Tầng suy luận mô hình cố tình KHÔNG có trước/sau.** Đó là đánh giá thường
+trực chứ không phải sự kiện, nên không có mốc "trước" để so; bịa ra một con số
+cho đủ cột chính là kiểu thiếu trung thực mà trang này sinh ra để tránh.
+
+Một cầu thủ chỉ có **một thẻ tin** thể hiện trạng thái hiện tại; các bước trước
+đó được giữ trong `history` của chính thẻ đó. Tin cũ lặp nguyên văn bị loại, còn
+diễn biến thật ("75% ra sân" → "đã rời CLB") thì giữ lại.
+
 ## 6. Backtest & chống data leakage (spec §18)
 
 - Dự báo GW *t* chỉ dùng dữ liệu có **trước deadline** GW *t* (`data_cutoff`).

@@ -33,6 +33,24 @@ UI hiển thị độ mới và cảnh báo nguồn lỗi/cũ.
 Chỉ dùng API/RSS hợp lệ, nội dung công khai, link nguồn, tóm tắt ngắn tự viết.
 **Không** scrape paywall, **không** sao chép nguyên bài.
 
+### Tầng nguồn tin đội hình (`services/news_tiers.py`)
+
+Mọi tin đều được xếp vào một trong sáu tầng theo **mức trực tiếp của bằng chứng**.
+Chỉ tầng có nguồn thật mới được điền; các tầng còn lại khai báo rõ `configured:
+false` kèm thứ cần có để lấp, thay vì hiện rỗng và ngầm ám chỉ là "không có tin".
+
+| # | Tầng | Tin cậy | Nguồn hiện tại |
+|---|---|---|---|
+| 1 | Chính thức từ CLB | 0.98 | FPL status feed ✅ |
+| 2 | Họp báo HLV | 0.92 | *chưa có* — cần RSS/API họp báo trước trận |
+| 3 | Nhà báo đội bóng | 0.75 | *chưa có* — cần danh sách nhà báo theo CLB + nguồn có bản quyền |
+| 4 | Predicted lineup | 0.60 | *chưa có* — `expert_provider` mới chỉ có seed **MOCK**, không dùng làm tin thật |
+| 5 | Tin đồn | 0.30 | *chưa có* |
+| 6 | Suy luận mô hình | 0.55 | engine xMins ✅ |
+
+Nguồn lạ **mặc định rơi xuống tầng "tin đồn"**: nguồn chưa rõ thì chưa có gì để
+tin, và sai lầm đáng sợ ở đây là tin quá nhiều chứ không phải tin quá ít.
+
 ## Cấp 4 — Chuyên gia & cộng đồng
 
 `app/providers/expert_provider.py` — roster cấu hình được, mỗi nguồn có:

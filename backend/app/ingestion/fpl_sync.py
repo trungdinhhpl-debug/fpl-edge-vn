@@ -178,6 +178,19 @@ def sync_bootstrap(db: Session, client: FPLClient) -> dict:
     #  and player_prices/injury_reports have FK columns but no relationship.)
     db.flush()
 
+    # Latest stored report per player, so an unchanged story is refreshed rather
+    # than inserted again. Without this every sync added another identical row:
+    # by GW1 the same suspension appeared three times in the news feed, and the
+    # per-tier counts were inflated by the duplicates.
+    latest_report: dict[int, InjuryReport] = {}
+    for r in db.scalars(select(InjuryReport)).all():
+        prev = latest_report.get(r.player_id)
+        if prev is None or (r.fetched_at and prev.fetched_at
+                            and r.fetched_at > prev.fetched_at):
+            latest_report[r.player_id] = r
+
+    now = datetime.now(timezone.utc)
+
     # price snapshots + injury reports (only for flagged players)
     for e in data.get("elements", []):
         db.add(PlayerPrice(
@@ -185,14 +198,28 @@ def sync_bootstrap(db: Session, client: FPLClient) -> dict:
             selected_by_percent=_f(e.get("selected_by_percent")),
         ))
         if e.get("status") not in ("a", None) or e.get("news"):
-            impact = _injury_impact(e.get("status"), e.get("chance_of_playing_next_round"))
+            status = e.get("status", "d")
+            chance = e.get("chance_of_playing_next_round")
+            news = e.get("news") or None
+            impact = _injury_impact(status, chance)
+            prev = latest_report.get(e["id"])
+            unchanged = (
+                prev is not None and prev.status == status
+                and prev.chance_of_playing == chance and prev.news == news
+            )
+            if unchanged:
+                # same story, seen again — only the "last checked" time moves
+                prev.fetched_at = now
+                prev.impact = impact
+                continue
             db.add(InjuryReport(
-                player_id=e["id"], status=e.get("status", "d"),
-                chance_of_playing=e.get("chance_of_playing_next_round"),
-                impact=impact, confirmed=bool(e.get("news")),
-                news=e.get("news") or None, source_name="FPL Official",
+                player_id=e["id"], status=status,
+                chance_of_playing=chance,
+                impact=impact, confirmed=bool(news),
+                news=news, source_name="FPL Official",
                 source_url="https://fantasy.premierleague.com",
                 published_at=_dt(e.get("news_added")),
+                fetched_at=now,
             ))
 
     _log(db, "FPL bootstrap-static", url, "ok", n_players)
