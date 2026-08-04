@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from app.config import settings
@@ -287,6 +287,18 @@ def seed_experts(db: Session) -> dict:
     for s in provider.get_sources():
         existing = db.scalar(select(ExpertSource).where(ExpertSource.name == s.name))
         if existing:
+            # Overwrite rather than skip. Earlier seeds shipped invented accuracy
+            # figures and a `verified` flag for real, named people; skipping would
+            # leave those claims in a live database forever. Accuracy now comes
+            # only from scored predictions (ExpertTrackRecord).
+            existing.source_type = s.source_type
+            existing.url = s.url
+            existing.reliability = s.reliability
+            existing.historical_accuracy = s.historical_accuracy
+            existing.expertise = s.expertise
+            existing.independence = s.independence
+            existing.verified_track_record = s.verified_track_record
+            existing.last_updated = datetime.now(timezone.utc)
             name_to_source[s.name] = existing
             continue
         src = ExpertSource(
@@ -300,23 +312,27 @@ def seed_experts(db: Session) -> dict:
         db.flush()
         name_to_source[s.name] = src
 
-    # only seed signals once
-    if db.scalar(select(func.count()).select_from(ExpertSignal)) == 0:
-        for sig in provider.get_signals():
-            src = name_to_source.get(sig.source_name)
-            if not src:
-                continue
-            player = db.scalar(select(Player).where(Player.web_name == sig.web_name))
-            specificity = 0.85 if sig.signal_type in ("start", "penalty", "setpiece") else 0.6
-            score = compute_signal_score(
-                src.reliability, src.historical_accuracy, src.independence,
-                specificity, sig.published_hours_ago,
-            )
-            db.add(ExpertSignal(
-                source_id=src.id, player_id=player.id if player else None,
-                gameweek=None, signal_type=sig.signal_type, confidence=sig.confidence,
-                summary=sig.summary, link=sig.link, signal_score=score, is_mock=True,
-            ))
+    # Rebuild demo signals every run instead of seeding once. The earlier seed
+    # attributed invented quotes to real named analysts and those rows are still
+    # sitting in live databases; only a rewrite clears them. Real signals from a
+    # licensed feed would carry is_mock=False and are never touched here.
+    db.execute(delete(ExpertSignal).where(ExpertSignal.is_mock.is_(True)))
+    for sig in provider.get_signals():
+        src = name_to_source.get(sig.source_name)
+        if not src:
+            continue
+        player = db.scalar(select(Player).where(Player.web_name == sig.web_name))
+        specificity = 0.85 if sig.signal_type in ("start", "penalty", "setpiece") else 0.6
+        score = compute_signal_score(
+            src.reliability, src.historical_accuracy, src.independence,
+            specificity, sig.published_hours_ago,
+        )
+        db.add(ExpertSignal(
+            source_id=src.id, player_id=player.id if player else None,
+            gameweek=None, signal_type=sig.signal_type, confidence=sig.confidence,
+            summary=sig.summary, link=sig.link, signal_score=score, is_mock=True,
+            origin_ref=sig.origin_ref,
+        ))
     _log(db, "Expert seed (mock)", "internal", "ok", 0, "labelled mock data", "community")
     db.commit()
     return {"sources": len(name_to_source)}

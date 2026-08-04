@@ -13,7 +13,8 @@ from app.services.chat import answer_question
 from app.services.common import planning_start_gw, team_lookup
 from app.services.fixtures import fixture_ticker
 from app.services.gameweek import dashboard, gameweek_status
-from app.services.news import expert_consensus, news_centre, news_feed
+from app.services.experts import expert_consensus
+from app.services.news import news_centre, news_feed
 from app.services.players import compare_players, list_players, player_detail
 
 router = APIRouter()

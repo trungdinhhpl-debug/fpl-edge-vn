@@ -53,18 +53,50 @@ tin, và sai lầm đáng sợ ở đây là tin quá nhiều chứ không phả
 
 ## Cấp 4 — Chuyên gia & cộng đồng
 
-`app/providers/expert_provider.py` — roster cấu hình được, mỗi nguồn có:
-tên, loại, uy tín, độ chính xác lịch sử, chuyên môn, hệ số độc lập, ngày cập nhật, link.
+`app/providers/expert_provider.py` (danh bạ) + `app/services/experts.py` (phân tích).
+
+### Gộp tiếng vọng trước, rồi mới tính đồng thuận
+
+Đếm bài đăng là lỗi nguy hiểm nhất ở khu vực này. Nhiều tài khoản dẫn lại **một**
+phát biểu là MỘT bằng chứng được lan truyền, không phải nhiều người cùng đồng ý.
 
 ```
-signal_score = reliability × recency × specificity × historical_accuracy × independence
+8 bài đăng nhắc A
+→ 3 nguồn độc lập (2 tài khoản dẫn lại cùng một phát biểu của HLV)
+→ đồng thuận thực 61%, không phải 8/8
 ```
 
-- `recency`: nửa đời ~48h (tin sát deadline trọng số cao hơn).
-- `independence`: chống **echo chamber** — 20 tài khoản chép 1 nguồn ≠ 20 nguồn độc lập.
-- Tín hiệu cộng đồng **không** ghi đè dữ liệu chính thức / tin ra sân đã xác nhận.
+`ExpertSignal.origin_ref` là thứ làm được điều đó: các tín hiệu truy về cùng một
+phát biểu gốc dùng chung một `origin_ref`, nên cả nhóm chỉ được **một phiếu**,
+mang trọng số của thành viên đáng tin nhất. Giao diện hiện cả hai con số — đồng
+thuận thực và "đếm thô" — để thấy rõ mức chênh.
 
-> Mặc định các signal là **mock có nhãn** (`is_mock=true`) để minh hoạ UI & toán tin cậy.
+Trọng số theo **lĩnh vực**, không theo âm lượng: giỏi dự đoán đội hình không nói
+lên gì về kế hoạch chip. Năm lĩnh vực: `injury`, `lineup`, `chip_planning`,
+`captaincy`, `statistics`. Số người theo dõi **không** phải đầu vào.
+
+Ý kiến trái chiều được **nêu riêng**, không bị bình quân hoá cho biến mất.
+
+### Độ chính xác phải kiếm được, không được gán
+
+Bảng `expert_track_record` lưu từng dự đoán cụ thể rồi chấm điểm khi có kết quả.
+Độ chính xác trên trang **chỉ** đến từ đó. Dưới 10 dự đoán đã chấm, nguồn hiện
+"chưa đủ dữ liệu" chứ không hiện con số.
+
+> **Lý do:** các nguồn trong danh bạ là người và tổ chức **có thật**. Bản trước
+> ship sẵn `historical_accuracy` 0.72–0.80 và nhãn `verified` cho họ — những con
+> số chưa từng đo, tức là gán một tuyên bố về hiệu suất cho người có danh tính.
+> Nay tất cả đặt về 0.0/False và chỉ tăng khi có bằng chứng.
+>
+> `reliability` còn lại là tiên nghiệm theo **loại** nguồn (toà soạn có quy trình
+> đính chính so với diễn đàn ẩn danh), không phải đánh giá cá nhân.
+>
+> **Thứ hạng FPL để trống**: FPL không có API xác thực thứ hạng của tài khoản bên
+> thứ ba, nên chép lại con số tự khai là không kiểm chứng được.
+
+> Signal demo mang nhãn `is_mock=true` và được gán cho **nguồn demo tổng hợp**
+> ("Nguồn demo A/B/C…"). Bản trước đặt lời vào miệng người thật ("Ben Crellin:
+> captain Salah") — dữ liệu minh hoạ tuyệt đối không được làm vậy.
 > Nối một nguồn RSS/API hợp lệ vào provider này để dùng dữ liệu thật.
 
 ## Độ mới & cache (spec §5)

@@ -51,6 +51,36 @@ class ExpertSignal(Base):
     # computed signal score = reliability × recency × specificity × accuracy × independence
     signal_score: Mapped[float] = mapped_column(Float, default=0.0)
     is_mock: Mapped[bool] = mapped_column(Boolean, default=True)  # clearly label model/demo data
+    # The PRIMARY statement this traces back to (e.g. "presser:ARS:gw3"). Signals
+    # sharing one are echoes of a single source: eight posts relaying one manager
+    # quote are one piece of evidence, not eight. Nullable so ensure_columns can
+    # add it to a live table, and because an original take has no upstream.
+    origin_ref: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+
+
+class ExpertTrackRecord(Base):
+    """A concrete prediction a source made, scored once the outcome is known.
+
+    Accuracy shown on the experts page comes from HERE and nowhere else. Seeding
+    an `historical_accuracy` figure would attach an invented performance claim to
+    a named, real person; a source with no scored sample shows "chưa đủ dữ liệu"
+    instead of a number it did not earn.
+    """
+    __tablename__ = "expert_track_record"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    source_id: Mapped[int] = mapped_column(ForeignKey("expert_sources.id"), index=True)
+    domain: Mapped[str] = mapped_column(String(24), index=True)  # see EXPERTISE_DOMAINS
+    gameweek: Mapped[int] = mapped_column(Integer, index=True)
+    player_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    claim: Mapped[str] = mapped_column(Text)
+    # None = not yet resolved; the UI must not count pending as either way
+    correct: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    resolved_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
 
 
 # ------------------------------------------------------------ news/injury ----
