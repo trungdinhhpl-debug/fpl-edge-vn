@@ -175,14 +175,43 @@ def test_weight_uses_domain_not_volume(db):
     assert in_domain > out_domain
 
 
+REAL_NAMES = {"Ben Crellin", "Lateriser (Pranil Sheth)",
+              "Fantasy Football Scout", "FPL Review", "r/FantasyPL"}
+
+
 def test_demo_signals_are_not_attributed_to_real_people(db):
     """Invented statements must never carry a real analyst's name."""
     payload = expert_consensus(db)
-    real_names = {"Ben Crellin", "Lateriser (Pranil Sheth)",
-                  "Fantasy Football Scout", "FPL Review", "r/FantasyPL"}
     for p in payload["players"]:
         for s in p["signals"]:
             if s["is_mock"]:
-                assert s["source"] not in real_names, (
+                assert s["source"] not in REAL_NAMES, (
                     f"demo signal attributed to real source {s['source']}"
                 )
+
+
+def test_stale_mock_rows_on_a_real_source_are_refused_at_read_time(db):
+    """A leftover row from an older seed must not reach the page.
+
+    Live databases still hold mock signals attached to real named analysts; the
+    write path only rewrites them at the next sync, so the read path has to
+    refuse them in the meantime.
+    """
+    from app.models import ExpertSignal, Player
+
+    src = db.scalar(select(ExpertSource).where(ExpertSource.name == "Ben Crellin"))
+    player_id = db.scalars(select(Player)).first().id
+    bad = ExpertSignal(
+        source_id=src.id, player_id=player_id, signal_type="captain",
+        confidence=0.9, summary="[STALE] câu bịa gán cho người thật",
+        signal_score=0.5, is_mock=True,
+    )
+    db.add(bad)
+    db.flush()
+    try:
+        payload = expert_consensus(db)
+        shown = [s["source"] for p in payload["players"] for s in p["signals"]]
+        assert "Ben Crellin" not in shown
+    finally:
+        db.delete(bad)
+        db.flush()

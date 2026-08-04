@@ -88,6 +88,13 @@ def track_records(db: Session) -> dict[int, dict]:
     return {sid: dict(d) for sid, d in agg.items()}
 
 
+def demo_source_names() -> set[str]:
+    """Names of the synthetic sources demo signals are allowed to speak for."""
+    from app.providers.expert_provider import DEFAULT_SOURCES
+
+    return {s.name for s in DEFAULT_SOURCES if s.url is None}
+
+
 def _domains(source: ExpertSource) -> list[str]:
     raw = (source.expertise or "").lower()
     return [d for d in EXPERTISE_DOMAINS if d in raw]
@@ -173,12 +180,20 @@ def expert_consensus(db: Session, limit: int = 50) -> dict:
     records = track_records(db)
     signals = db.scalars(select(ExpertSignal)).all()
 
+    demo_sources = demo_source_names()
+
     by_player: dict[int, list[dict]] = defaultdict(list)
     for s in signals:
         if s.player_id is None or s.player_id not in players:
             continue
         src = sources.get(s.source_id)
         if not src:
+            continue
+        # A demo signal may only ever speak for a synthetic source. Older seeds
+        # attached invented statements to real, named analysts, and those rows
+        # are still in live databases until the next sync rewrites them — so the
+        # read path refuses them rather than waiting for the write path to heal.
+        if s.is_mock and src.name not in demo_sources:
             continue
         domain = SIGNAL_DOMAIN.get(s.signal_type, "statistics")
         by_player[s.player_id].append({
