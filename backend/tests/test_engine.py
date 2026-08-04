@@ -1,6 +1,8 @@
 """Projection engine unit tests (xMins, xP, Poisson helpers)."""
 import math
 
+import pytest
+
 from app.engine.xmins import estimate_minutes
 from app.engine.xpoints import _poisson_ge_k, expected_points
 
@@ -78,17 +80,129 @@ def test_preseason_nailed_player_still_high():
 
 
 # ---------------------------------------------------------- market odds ------
-def test_odds_inversion_recovers_lambdas():
-    """1X2 + totals -> expected goals must round-trip back to the same market."""
-    from app.providers.probability import _outcome_probs, _p_over, _solve_supremacy, _solve_total
+RHO = -0.13
 
-    lam_h, lam_a = 2.1, 0.9
-    ph, _, _ = _outcome_probs(lam_h, lam_a)
-    total = _solve_total(_p_over(lam_h + lam_a, 2.5), 2.5)
-    sup = _solve_supremacy(ph, total)
-    assert abs(total - (lam_h + lam_a)) < 0.05
-    assert abs((total + sup) / 2 - lam_h) < 0.1
-    assert abs((total - sup) / 2 - lam_a) < 0.1
+
+def _synthetic_market(lam_h, lam_a, total_lines=(2.5, 3.5), handicaps=(-0.75, -0.5)):
+    """The exact prices a book would hang if it believed (lam_h, lam_a, RHO)."""
+    from app.providers.probability import (
+        _distributions, _no_push_prob, _outcome_probs, _score_grid, _split,
+    )
+
+    grid = _score_grid(lam_h, lam_a, RHO)
+    totals_dist, margin_dist = _distributions(grid)
+    return (
+        _outcome_probs(lam_h, lam_a, RHO),
+        [(L, _no_push_prob(*_split(totals_dist, 0, L))) for L in total_lines],
+        # home covers when (home - away) > -point
+        [(h, _no_push_prob(*_split(margin_dist, -10, -h))) for h in handicaps],
+    )
+
+
+def test_odds_inversion_recovers_lambdas():
+    """1X2 + totals + handicap -> expected goals must round-trip exactly."""
+    from app.providers.probability import fit_lambdas
+
+    for lam_h, lam_a in [(2.1, 0.9), (1.2, 1.3), (3.0, 0.6), (0.9, 1.8)]:
+        p_1x2, totals, handicaps = _synthetic_market(lam_h, lam_a)
+        fit_h, fit_a, err = fit_lambdas(p_1x2, totals, handicaps, rho=RHO)
+        assert abs(fit_h - lam_h) < 0.01
+        assert abs(fit_a - lam_a) < 0.01
+        assert err < 1e-8          # all three markets satisfied at once
+
+
+def test_odds_inversion_survives_missing_markets():
+    """A market the book does not quote drops out; no default is substituted.
+
+    Regression: the old code froze the total at a league average whenever the
+    totals market was absent, which discarded what 1X2 already says about it.
+    """
+    from app.providers.probability import fit_lambdas
+
+    lam_h, lam_a = 2.0, 1.1
+    p_1x2, totals, handicaps = _synthetic_market(lam_h, lam_a)
+    for label, args in [
+        ("1x2+ou+ah", (p_1x2, totals, handicaps)),
+        ("1x2+ou", (p_1x2, totals, [])),
+        ("1x2+ah", (p_1x2, [], handicaps)),
+        ("1x2 only", (p_1x2, [], [])),
+        ("ou+ah only", (None, totals, handicaps)),
+    ]:
+        fit_h, fit_a, _ = fit_lambdas(*args, rho=RHO)
+        assert abs(fit_h - lam_h) < 0.05, label
+        assert abs(fit_a - lam_a) < 0.05, label
+
+
+def test_dixon_coles_lifts_low_scoring_draws():
+    """rho < 0 must raise 0-0 and 1-1 and trim 1-0 and 0-1, mass conserved."""
+    from app.providers.probability import _outcome_probs, _score_grid
+
+    poisson = _score_grid(1.5, 1.2, 0.0)
+    dc = _score_grid(1.5, 1.2, RHO)
+
+    assert dc[0][0] > poisson[0][0]
+    assert dc[1][1] > poisson[1][1]
+    assert dc[1][0] < poisson[1][0]
+    assert dc[0][1] < poisson[0][1]
+    assert dc[2][1] == pytest.approx(poisson[2][1], rel=1e-9)   # untouched
+    assert sum(sum(row) for row in dc) == pytest.approx(1.0)
+    # the whole point: independent Poisson under-prices the draw
+    assert _outcome_probs(1.5, 1.2, RHO)[1] > _outcome_probs(1.5, 1.2, 0.0)[1]
+
+
+def test_dixon_coles_preserves_marginals():
+    """tau moves joint mass only — each team's goal distribution is untouched.
+
+    This is why `team expected goals = lambda` is exact rather than an
+    approximation, and why xpoints.py may keep computing a clean sheet as
+    exp(-lambda_conceded) even though the market fit now uses a DC grid.
+    Algebraically it holds because P(1; mu) == mu * P(0; mu).
+    """
+    from app.providers.probability import _score_grid
+
+    for lam_h, lam_a in [(2.34, 0.72), (1.5, 1.2), (0.8, 2.2)]:
+        grid = _score_grid(lam_h, lam_a, RHO)
+        for k in range(5):
+            poisson_k = math.exp(-lam_h) * lam_h**k / math.factorial(k)
+            assert sum(grid[k]) == pytest.approx(poisson_k, abs=5e-4)
+        clean_sheet = sum(grid[i][0] for i in range(11))    # away fails to score
+        assert clean_sheet == pytest.approx(math.exp(-lam_a), abs=5e-4)
+
+
+def test_asian_handicap_quarter_lines_and_pushes():
+    """Quarter lines split across neighbours; level lines can push."""
+    from app.providers.probability import (
+        _distributions, _no_push_prob, _score_grid, _split,
+    )
+
+    _, margin = _distributions(_score_grid(1.8, 1.1, RHO))
+    level = _split(margin, -10, 0.0)        # home 0.0  -> push on a draw
+    half = _split(margin, -10, 0.5)         # home -0.5 -> no push
+    quarter = _split(margin, -10, 0.25)     # home -0.25 -> half of each
+
+    assert level[1] > 0 and half[1] == pytest.approx(0.0)
+    for k in range(3):
+        assert quarter[k] == pytest.approx((level[k] + half[k]) / 2)
+    # a push refunds the stake, so the fair price excludes it
+    assert _no_push_prob(*level) == pytest.approx(level[0] / (level[0] + level[2]))
+    assert _no_push_prob(*level) > level[0]
+
+
+def test_odds_line_consensus_drops_thin_outliers():
+    """One book hanging an odd line must not drag the fit."""
+    from app.providers.probability import _consensus_lines
+
+    quotes = [(2.5, 0.50), (2.5, 0.52), (2.5, 0.51), (2.5, 0.49), (4.5, 0.10)]
+    lines = _consensus_lines(quotes)
+    assert [l for l, _ in lines] == [2.5]
+    assert lines[0][1] == pytest.approx(0.505)
+
+    # a genuine split between two lines is kept — both are real observations
+    split = _consensus_lines([(2.5, 0.50), (2.5, 0.52), (3.0, 0.40), (3.0, 0.42)])
+    assert [l for l, _ in split] == [2.5, 3.0]
+
+    # a thin market where every line has one book: keep what little there is
+    assert len(_consensus_lines([(2.5, 0.5), (3.0, 0.4)])) == 2
 
 
 def test_odds_team_name_matching():

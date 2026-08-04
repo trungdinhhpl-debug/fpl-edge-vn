@@ -47,6 +47,22 @@ class Settings(BaseSettings):
     odds_api_key: str = ""
     # how far to trust bookmaker consensus over the internal model, 0..1
     odds_market_weight: float = 0.7
+    # Also pull the Asian handicap (`spreads`). It is the sharpest of the three
+    # markets, but a request costs (markets x regions) credits, so this takes a
+    # sync from 2 to 3 against the monthly quota.
+    odds_include_handicap: bool = True
+    # Relative weights of the three markets in the joint fit of (lam_home,
+    # lam_away). Each market contributes the MEAN squared error over its own
+    # lines, so these are true relative weights regardless of how many lines a
+    # book hangs. See app/providers/probability.py.
+    odds_weight_1x2: float = 1.0
+    odds_weight_totals: float = 1.0
+    odds_weight_handicap: float = 1.0
+    # Dixon–Coles low-score correlation. Negative lifts 0-0 / 1-1 and trims
+    # 1-0 / 0-1; -0.13 is the estimate from the original paper's English league
+    # sample. It is a constant, not a fitted parameter — one match's prices
+    # cannot identify it. Set 0 to fall back to an independent double-Poisson.
+    odds_dixon_coles_rho: float = -0.13
 
     # Understat (optional, Phase 2). Empty => rely on FPL's own xG/xA.
     understat_enabled: bool = False

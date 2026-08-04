@@ -355,8 +355,18 @@ def sync_odds(db: Session) -> dict:
             db.add(MarketOdds(fixture_id=fx.id, **values))
         matched += 1
 
+    # Fit quality is worth seeing in the log: a big residual means the three
+    # markets disagree with each other more than the score model can reconcile.
+    fitted = [m for m in matches if m.markets_used]
+    detail = f"{matched} trận khớp, {skipped} bỏ qua"
+    if fitted:
+        rmse = (sum(m.fit_error for m in fitted) / len(fitted)) ** 0.5
+        used = sorted({"+".join(m.markets_used) for m in fitted})
+        detail += (
+            f" · sai số khớp RMSE {rmse * 100:.2f} điểm % · thị trường {', '.join(used)}"
+        )
     _log(db, "The Odds API (soccer_epl)", ODDS_URL, "ok" if matched else "error",
-         matched, f"{matched} trận khớp, {skipped} bỏ qua", "market")
+         matched, detail, "market")
     db.commit()
     return {"matched": matched, "skipped": skipped, "enabled": True}
 

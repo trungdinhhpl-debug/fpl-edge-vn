@@ -52,6 +52,53 @@ Defensive Contribution) — không hard-code luật mùa cũ.
 kết hợp strength ratings của FPL với xG/xGA thực nghiệm, blend theo số trận đã đá
 (shrinkage), có điều chỉnh sân nhà/khách (Poisson).
 
+### 2b. Nghịch đảo kèo nhà cái → λ mỗi đội (`providers/probability.py`)
+
+Vòng nào có kèo thì λ được **khớp đồng thời hai tham số** với cả ba thị trường
+trên **một** ma trận tỷ số, thay vì giải lần lượt từng thị trường:
+
+```
+min over (λ_home, λ_away):
+      w1 · MSE( 1X2 )  +  w2 · MSE( tài/xỉu )  +  w3 · MSE( kèo châu Á )
+→ team expected goals = λ_home, λ_away
+```
+
+Ma trận tỷ số dùng **Dixon–Coles** (1997):
+
+```
+P(i,j) = τ(i,j) · Poisson(i; λ_home) · Poisson(j; λ_away)
+
+τ(0,0) = 1 − λ_home·λ_away·ρ     τ(0,1) = 1 + λ_home·ρ
+τ(1,0) = 1 + λ_away·ρ            τ(1,1) = 1 − ρ        τ = 1 với mọi tỷ số khác
+```
+
+ρ < 0 (mặc định −0.13) **nâng 0-0 và 1-1, hạ 1-0 và 0-1** — đúng chỗ mà Poisson
+độc lập sai nhiều nhất: nó định giá hụt các trận hòa ít bàn. ρ **không** được
+khớp: giá của một trận đơn lẻ không đủ để nhận dạng ρ (bài gốc ước lượng từ cả
+mùa), nên nó là hằng số cấu hình — vì vậy bài toán chỉ có **hai tham số**.
+
+Vài điểm cần biết:
+
+- **τ bảo toàn phân phối biên.** Vì `P(1;μ) = μ·P(0;μ)`, hiệu chỉnh ở ô 0-0 và
+  0-1 triệt tiêu nhau khi cộng theo hàng. Nghĩa là `λ` vẫn đúng là kỳ vọng bàn
+  thắng của mỗi đội (không phải xấp xỉ), và `clean sheet = exp(−λ_thủng lưới)` ở
+  `xpoints.py` vẫn nhất quán — Dixon–Coles chỉ đổi **quan hệ phụ thuộc** giữa hai
+  đội, tức đúng phần mà 1X2 / tài xỉu / chấp cần tới.
+- **Kèo chấp và kèo tài/xỉu mức nguyên hoàn tiền khi hòa vốn (push).** Giá đã khử
+  vig của chúng vì thế là xác suất **có điều kiện không push**; phía mô hình cũng
+  được lấy điều kiện y hệt trước khi tính sai số. Mức lẻ 1/4 (−0.25, −0.75) tách
+  đôi sang hai mức kề, đúng cách nhà cái quyết toán.
+- **Thiếu thị trường nào thì bỏ hẳn thị trường đó**, không thay bằng giá trị mặc
+  định. Hai xác suất tự do của 1X2 đã đủ nhận dạng chính xác hai tham số, và đủ
+  ổn định: lệch 1 điểm % ở giá hòa chỉ làm tổng bàn đổi ~0.18. Bản cũ ghim tổng
+  bàn về mức trung bình giải mỗi khi thiếu kèo tài/xỉu — như vậy là vứt đi thông
+  tin thật.
+- Mỗi mức kèo là **một quan sát riêng**; giá được trung bình theo từng mức chứ
+  không trộn giữa các mức khác nhau. Mức nào quá ít nhà cái treo so với mức chính
+  thì loại.
+- Sai số khớp cuối cùng được ghi vào log đồng bộ. Sai số lớn nghĩa là ba thị
+  trường mâu thuẫn nhau nhiều hơn mức một mô hình tỷ số có thể dung hòa.
+
 ## 3. Monte Carlo
 
 Mô phỏng ở cấp **trận đấu của đội** để giữ tương quan:

@@ -19,8 +19,13 @@ UI hiển thị độ mới và cảnh báo nguồn lỗi/cũ.
 
 ## Cấp 2 — Thống kê (tùy chọn)
 
-- **The Odds API** (`probability.py`): xác suất trận (h2h). Có key → dùng thật;
-  không có → model Poisson nội bộ, **gắn nhãn `model_estimate`** (không giả làm giá thị trường).
+- **The Odds API** (`probability.py`): 1X2 (`h2h`), tài/xỉu (`totals`) và kèo châu
+  Á (`spreads`). Cả ba được khớp đồng thời ra `λ` mỗi đội trên một ma trận tỷ số
+  Dixon–Coles — xem METHODOLOGY §2b. Có key → dùng thật; không có → model Poisson
+  nội bộ, **gắn nhãn `model_estimate`** (không giả làm giá thị trường).
+  *Hạn mức:* mỗi request tốn (số thị trường × số region) credit, nên thêm kèo chấp
+  đưa một lần đồng bộ từ 2 lên 3 credit. Đặt `ODDS_INCLUDE_HANDICAP=false` để quay
+  lại 2 (khi đó chỉ khớp 1X2 + tài/xỉu).
 - **Understat** (Phase 2): xG/npxG/xA nâng cao. Hiện dựa vào xG/xA của chính FPL để tự chứa & hợp pháp.
 
 ## Cấp 3 — Phân tích FPL

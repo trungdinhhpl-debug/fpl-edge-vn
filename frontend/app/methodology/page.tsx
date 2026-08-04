@@ -63,11 +63,21 @@ export default function MethodologyPage() {
           <CardContent className="space-y-2 text-sm text-muted-foreground">
             <p>
               Với những vòng đã có kèo, hệ thống lấy đồng thuận của ~20 nhà cái (The Odds API)
-              và <b>giải ngược ra số bàn kỳ vọng</b> mỗi đội:
+              và <b>giải ngược ra số bàn kỳ vọng</b> mỗi đội. Hai tham số λ được khớp{" "}
+              <b>đồng thời với cả ba thị trường</b> trên cùng một ma trận tỷ số, thay vì
+              giải lần lượt từng thị trường:
             </p>
             <code className="block rounded bg-muted p-2 text-xs text-foreground">
-              Tài/xỉu → tổng bàn T · Kèo 1X2 → chênh lệch S · λ_nhà=(T+S)/2, λ_khách=(T−S)/2
+              min (λ_nhà, λ_khách): w₁·sai số(1X2) + w₂·sai số(tài/xỉu) + w₃·sai số(kèo châu Á)
             </code>
+            <p>
+              Ma trận tỷ số dùng hiệu chỉnh <b>Dixon–Coles</b> (ρ ={" "}
+              {data?.market_odds?.inversion?.dixon_coles_rho ?? -0.13}): nâng xác suất các tỷ
+              số thấp <b>0-0</b> và <b>1-1</b>, hạ <b>1-0</b> và <b>0-1</b> — đúng chỗ mà mô
+              hình Poisson độc lập sai nhiều nhất, vì nó định giá hụt các trận hòa ít bàn.
+              Hiệu chỉnh này chỉ đổi quan hệ giữa hai đội, không đổi kỳ vọng bàn thắng của
+              từng đội.
+            </p>
             <p>
               Giá đã khử biên lợi nhuận (de-vig) và lấy trung bình nhiều nhà cái, sau đó
               pha với mô hình nội bộ theo trọng số {data?.market_odds?.market_weight ?? 0.7} cho thị trường.

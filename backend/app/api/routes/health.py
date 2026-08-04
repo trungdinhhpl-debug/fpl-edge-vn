@@ -67,9 +67,22 @@ def model_health(db: Session = Depends(get_db)) -> dict:
             "gameweeks": odds_gws,
             "market_weight": settings.odds_market_weight,
             "last_fetched": odds_at.isoformat() if odds_at else None,
+            "inversion": {
+                "method": "joint least-squares, Dixon–Coles score matrix",
+                "markets": ["1X2", "over/under"]
+                + (["asian_handicap"] if settings.odds_include_handicap else []),
+                "weights": {
+                    "1x2": settings.odds_weight_1x2,
+                    "totals": settings.odds_weight_totals,
+                    "handicap": settings.odds_weight_handicap,
+                },
+                "dixon_coles_rho": settings.odds_dixon_coles_rho,
+            },
             "note": (
                 "Vòng có kèo dùng đồng thuận nhà cái; vòng không có dùng mô hình "
-                "nội bộ (model estimate)."
+                "nội bộ (model estimate). λ mỗi đội được khớp đồng thời với cả ba "
+                "thị trường trên một ma trận tỷ số Dixon–Coles (ρ hiệu chỉnh các "
+                "tỷ số thấp 0-0, 1-0, 0-1, 1-1)."
             ),
         },
         "montecarlo_iterations": settings.montecarlo_iterations,
