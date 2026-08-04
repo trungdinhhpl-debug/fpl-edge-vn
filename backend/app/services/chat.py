@@ -133,17 +133,28 @@ def _fmt_money(price: float) -> str:
 
 def _answer_captain(db: Session) -> dict:
     gw = planning_start_gw(db)
-    top = captain_ranking(db, gw, limit=5)["candidates"]
+    ranking = captain_ranking(db, gw, limit=5)
+    top = ranking["lists"]["ev"]["players"]
     if not top:
         return _no_data("chưa có dự báo cho vòng tới")
     lines = [f"**Đội trưởng nên chọn — vòng {gw}:**", ""]
     for i, c in enumerate(top, 1):
         lines.append(
             f"{i}. **{c['name']}** ({c['team']}) — captain xP **{c['captain_xp']:.1f}**, "
-            f"ceiling {c['ceiling']:.0f}, P(≥20đ) {round(c['p_haul'] * 100)}%, "
-            f"xMins {c['xmins']:.0f}′"
-            + (f" · {', '.join(c['tags'])}" if c.get("tags") else "")
+            f"ceiling {c['ceiling']:.0f}, P(≥20đ) {round(c['p_10_plus'] * 100)}%, "
+            f"xMins {c['xmins']:.0f}′ · EO dự phóng {c['projected_eo']:.0f}%"
         )
+    # the other three questions get one line each, not a hidden tag
+    for key, arrow in (("safe", "An toàn nhất"), ("ceiling", "Ceiling cao nhất"),
+                       ("chase", "Đuổi hạng tốt nhất")):
+        picks = ranking["lists"][key]["players"]
+        if picks and picks[0]["id"] != top[0]["id"]:
+            b = picks[0]
+            lines.append(
+                f"- **{arrow}:** {b['name']} ({b['team']}) — "
+                f"sàn {b['floor']:.0f}đ / ceiling {b['ceiling']:.0f}đ, "
+                f"EO {b['projected_eo']:.0f}%"
+            )
     best = top[0]
     lines += [
         "",

@@ -77,7 +77,7 @@ def render_report_body(db: Session) -> str:
         f"""<div class="capcard"><div class="capn">{i+1}. {_e(c['name'])}</div>
         <div class="caps">{_e(c['team'])} · {_e(c['position'])}</div>
         <div class="capv">{c['captain_xp']:.1f}<span>Cap xP</span></div>
-        <div class="capm">Ceiling {c.get('ceiling',0):.0f} · P(≥20đ) {round((c.get('p_haul') or 0)*100)}%</div></div>"""
+        <div class="capm">Ceiling {c.get('ceiling',0):.0f} · P(≥20đ) {round((c.get('p_10_plus') or 0)*100)}%</div></div>"""
         for i, c in enumerate(dash.get("captain_top", [])[:6])
     )
 

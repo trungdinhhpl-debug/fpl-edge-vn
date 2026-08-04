@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_db
 from app.models import Fixture, Team
 from app.schemas import ChatRequest
-from app.services.captains import captain_ranking
+from app.services.captains import captain_ranking, compare_captains
 from app.services.chat import answer_question
 from app.services.common import planning_start_gw, team_lookup
 from app.services.fixtures import fixture_ticker
@@ -104,6 +104,13 @@ def get_ticker(start_gw: int | None = None, n_gws: int = Query(8, le=12),
 def get_captains(gameweek: int | None = None, limit: int = 20,
                  db: Session = Depends(get_db)) -> dict:
     return captain_ranking(db, gameweek, limit)
+
+
+@router.get("/captains/compare")
+def get_captain_compare(a: int, b: int, gameweek: int | None = None,
+                        db: Session = Depends(get_db)) -> dict:
+    """Head-to-head between two captain options for one gameweek."""
+    return compare_captains(db, a, b, gameweek)
 
 
 @router.get("/news")

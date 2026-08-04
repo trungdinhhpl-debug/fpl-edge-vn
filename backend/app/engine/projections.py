@@ -292,7 +292,8 @@ def build_projections(
                     mc_p25=round(mc["mc_p25"], 2), mc_p75=round(mc["mc_p75"], 2),
                     mc_p90=round(mc["mc_p90"], 2), mc_ceiling=round(mc["mc_ceiling"], 2),
                     p_blank=round(mc["p_blank"], 3), p_returns=round(mc["p_returns"], 3),
-                    p_haul=round(mc["p_haul"], 3), variance=round(mc["variance"], 2),
+                    p_haul=round(mc["p_haul"], 3), p_15=round(mc["p_15"], 3),
+                    variance=round(mc["variance"], 2),
                     fixture_id=acc.fixture_id, opponent_team=acc.opponent_id,
                     was_home=acc.is_home, n_fixtures=n_fix_player,
                     confidence=conf, minutes_risk=mr, performance_risk=pr, overall_risk=overall,
@@ -312,7 +313,8 @@ def _analytic_dist(xp: float) -> dict:
         "mc_mean": xp, "mc_median": max(0, xp - 0.5), "mc_p25": max(0, xp - 1.5),
         "mc_p75": xp + 1.5, "mc_p90": xp + 3.5, "mc_ceiling": xp + 5.0,
         "p_blank": 0.4 if xp < 3 else 0.25, "p_returns": min(0.6, xp / 8),
-        "p_haul": min(0.2, xp / 30), "variance": max(1.0, xp),
+        "p_haul": min(0.2, xp / 30), "p_15": min(0.08, xp / 90),
+        "variance": max(1.0, xp),
     }
 
 

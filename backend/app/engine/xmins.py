@@ -69,6 +69,45 @@ def _availability_multiplier(status: str, chance: int | None) -> tuple[float, st
     return 1.0, ""
 
 
+# P(clears 60' | started) when we have no evidence either way. Most starters do.
+DEFAULT_COMPLETION = 0.92
+# A recent appearance of at least this many minutes is treated as a start.
+LIKELY_START_MINUTES = 45
+
+
+def _completion_rate(recent_minutes: list[int] | None, season_starts: int,
+                     season_minutes: int) -> tuple[float, str]:
+    """P(still on the pitch at 60' | started), per player.
+
+    This used to be a flat 0.92 for everybody, which made any "substitution
+    risk" derived from it the same constant for every player in the game —
+    a number that looks like an insight but carries none. Two real signals:
+
+      1. recent games he started — did he actually see 60'?
+      2. season minutes per start — a regular hooked on 65' shows up here.
+
+    Falls back to the flat rate only when neither exists, and says so, so the
+    caller can label the difference instead of implying certainty.
+    """
+    if recent_minutes:
+        started = [m for m in recent_minutes[-6:] if m >= LIKELY_START_MINUTES]
+        if len(started) >= 3:
+            rate = sum(1 for m in started if m >= 60) / len(started)
+            # never fully 0 or 1 on a handful of games (Laplace-style smoothing)
+            smoothed = (rate * len(started) + DEFAULT_COMPLETION) / (len(started) + 1)
+            return min(0.98, max(0.30, smoothed)), "recent starts"
+
+    if season_starts >= 3:
+        # Slightly optimistic: season minutes include cameos off the bench, so
+        # this over-credits players who both start and sub. Directionally right,
+        # and only used when recent form is unavailable.
+        mins_per_start = season_minutes / season_starts
+        rate = 0.5 + (mins_per_start - 60) / 60
+        return min(0.97, max(0.35, rate)), "season minutes per start"
+
+    return DEFAULT_COMPLETION, "no data — league default"
+
+
 def estimate_minutes(
     *,
     element_type: int,
@@ -146,7 +185,10 @@ def estimate_minutes(
 
     xmins = p_start * E_MIN_START + p_sub * E_MIN_SUB
     xmins *= n_fixtures_this_gw  # a DGW roughly doubles the minutes on offer
-    p_60_plus = p_start * 0.92   # most starters clear 60'
+    completion, completion_basis = _completion_rate(
+        recent_minutes, season_starts, season_minutes
+    )
+    p_60_plus = p_start * completion
 
     # confidence
     if status != "a" and (chance_of_playing is None or chance_of_playing < 75):

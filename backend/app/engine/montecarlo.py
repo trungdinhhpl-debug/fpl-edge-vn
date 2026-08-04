@@ -122,5 +122,8 @@ def summarise(points: np.ndarray) -> dict:
         "p_blank": float(np.mean(points <= 2)),
         "p_returns": float(np.mean(points >= 5)),
         "p_haul": float(np.mean(points >= 10)),
+        # A captain doubles the score, so >=15 is the "won me the gameweek"
+        # tail that separates ceiling picks from merely high-EV ones.
+        "p_15": float(np.mean(points >= 15)),
         "variance": float(np.var(points)),
     }

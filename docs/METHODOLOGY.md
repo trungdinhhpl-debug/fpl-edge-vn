@@ -187,6 +187,63 @@ báo động lượng, không phải dự báo**.
 Toàn bộ phần này là số học trên kế hoạch đã giải — không giải MILP lần hai, nên
 không tốn thêm thời gian xử lý.
 
+## 5c. Đội trưởng — bốn danh sách, không phải một (`services/captains.py`)
+
+Xếp hạng theo xP chỉ trả lời được một trong bốn câu hỏi mà người chơi thật sự
+có, và bốn câu đó cho bốn đáp án khác nhau. Mỗi danh sách được chấm và xếp hạng
+**độc lập trên toàn bộ nhóm ứng viên**:
+
+| Danh sách | Chấm theo | Trả lời |
+|---|---|---|
+| EV cao nhất | `2 × xP` | Nhiều điểm nhất tính trung bình |
+| An toàn nhất | `2 × P25 × P(start) × (1 − ½·rủi ro thay ra) − 4 × P(blank)` | Giữ thứ hạng đang có |
+| Ceiling cao nhất | `P95` | Điểm đủ thắng cả vòng |
+| Đuổi hạng tốt nhất | `P95 × (2 − EO/100)` | Điểm **hơn được đám đông** |
+
+Bản cũ xếp theo EV, cắt lấy top 20, rồi mới dán nhãn lên đúng lát cắt đó — nên
+một lựa chọn ceiling hay differential đứng thứ 25 về EV thì vĩnh viễn không bao
+giờ hiện ra.
+
+**Lợi thế bứt phá** là con số làm cho danh sách đuổi hạng trung thực được. Nếu
+bạn bắt băng cho X trong khi EO của X là *EO*, bạn nhận `2·xP` còn người trung
+bình nhận `(EO/100)·xP`, nên phần hơn là
+
+```
+edge = xP · (2 − EO/100)
+```
+
+Ở EO = 200% (ai cũng sở hữu và ai cũng bắt băng) phần hơn **đúng bằng 0** — bắt
+băng cho lựa chọn của cả làng thì không thể lên hạng, xP có cao đến đâu.
+
+### EO dự phóng
+
+FPL công khai tỷ lệ sở hữu nhưng **không** công khai số lượt bắt băng đội trưởng
+trước hạn chót, nên nửa sau phải mô hình hoá: chỉ bắt băng được cho người mình
+sở hữu, và đám đông dồn vào lựa chọn EV tốt nhất.
+
+```
+share(p) ∝ ownership(p) · exp(k · (EV(p) − EV_tốt_nhất)),  k = 0.35
+EO = ownership + share
+```
+
+`k` hiệu chỉnh theo hình dạng thực tế của một vòng bình thường: một premium áp
+đảo lấy khoảng một nửa số băng đội trưởng, á quân khoảng một phần mười, phần còn
+lại rải dài. Kết quả **luôn gắn nhãn là dự phóng** kèm độ tin cậy riêng, và tin
+cậy thấp nhất đúng ở chỗ quan trọng nhất — các lựa chọn đông người.
+
+### Rủi ro bị thay ra
+
+```
+sub_risk = P(bị rút trước phút 60 | có đá chính) = (P(start) − P(60+)) / P(start)
+```
+
+Trước đây `P(60+)` được đặt cứng bằng `P(start) × 0.92`, nên chỉ số này ra **đúng
+8% cho mọi cầu thủ trong game** — một con số trông như thông tin nhưng không mang
+thông tin nào. Giờ tỷ lệ đá trọn trận được ước lượng riêng từng người: ưu tiên
+các trận gần nhất mà cầu thủ có đá chính, nếu chưa đủ mẫu thì dùng số phút trên
+mỗi lần đá chính của cả mùa, và chỉ khi không có gì mới rơi về mức nền của giải
+(có ghi rõ nguồn suy ra). Chỉ số này cũng nuôi lại phần clean sheet trong xP.
+
 ## 6. Backtest & chống data leakage (spec §18)
 
 - Dự báo GW *t* chỉ dùng dữ liệu có **trước deadline** GW *t* (`data_cutoff`).

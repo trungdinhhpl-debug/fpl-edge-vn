@@ -30,7 +30,37 @@ def test_players_list_has_projections():
 def test_captains_endpoint():
     r = client.get("/api/captains?limit=5")
     assert r.status_code == 200
-    assert "candidates" in r.json()
+    body = r.json()
+    assert set(body["lists"]) == {"ev", "safe", "ceiling", "chase"}
+    for key, lst in body["lists"].items():
+        assert lst["players"], f"list {key} is empty"
+        for c in lst["players"]:
+            # every metric the captaincy page promises must be present
+            for field in ("xp", "xmins", "p_start", "p_blank", "p_10_plus",
+                          "p_15_plus", "penalty_duty", "projected_eo",
+                          "substitution_risk", "confidence"):
+                assert field in c, f"{key} list missing {field}"
+
+
+def test_captain_compare_endpoint():
+    ev = client.get("/api/captains?limit=5").json()["lists"]["ev"]["players"]
+    a, b = ev[0]["id"], ev[1]["id"]
+    r = client.get(f"/api/captains/compare?a={a}&b={b}")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["a"]["id"] == a and body["b"]["id"] == b
+    # every dimension lands in exactly one bucket
+    total = len(body["a_better"]) + len(body["b_better"]) + len(body["even"])
+    from app.services.captains import _DIMENSIONS
+    assert total == len(_DIMENSIONS)
+    assert body["verdict"]["pick"] in ("a", "b")
+    assert body["verdict"]["reason"]
+
+
+def test_captain_compare_unknown_player_is_explained():
+    r = client.get("/api/captains/compare?a=999999&b=999998")
+    assert r.status_code == 200
+    assert "error" in r.json()
 
 
 def test_free_hit_via_api_is_legal():

@@ -89,7 +89,7 @@ def dashboard(db: Session) -> dict:
         for p in top_in
     ]
 
-    caps = captain_ranking(db, start, limit=5)["candidates"]
+    caps = captain_ranking(db, start, limit=5)["lists"]["ev"]["players"]
     injuries = [n for n in news_feed(db, limit=40) if n["impact"] in ("Critical", "High")][:8]
     bd = blank_double_gws(db, start, start + 8)
 

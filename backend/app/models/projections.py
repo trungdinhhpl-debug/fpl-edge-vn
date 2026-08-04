@@ -82,6 +82,9 @@ class PlayerProjection(Base):
     p_blank: Mapped[float] = mapped_column(Float, default=0.0)     # <=2 pts
     p_returns: Mapped[float] = mapped_column(Float, default=0.0)   # >=5 pts (haul-ish)
     p_haul: Mapped[float] = mapped_column(Float, default=0.0)      # >=10 pts
+    # Nullable so db.ensure_columns() can add it to a live table — it only adds
+    # NULL-able columns, and a NOT NULL add would fail on the existing rows.
+    p_15: Mapped[float | None] = mapped_column(Float, nullable=True, default=0.0)
     variance: Mapped[float] = mapped_column(Float, default=0.0)
 
     # difficulty context
