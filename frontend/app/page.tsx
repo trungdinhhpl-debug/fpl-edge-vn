@@ -6,6 +6,7 @@ import { useT } from "@/lib/i18n";
 import { Card, CardContent, CardHeader, CardTitle, Spinner, ErrorBox, Badge, Button, Stat } from "@/components/ui";
 import { PlayerCard } from "@/components/fpl";
 import { DeadlineCountdown } from "@/components/deadline-countdown";
+import { VersionBar } from "@/components/version-bar";
 import { fmt, timeAgo } from "@/lib/format";
 import { riskBg } from "@/lib/utils";
 import { useState } from "react";
@@ -53,6 +54,8 @@ export default function Dashboard() {
           </Button>
         </div>
       </div>
+
+      <VersionBar />
 
       <div className="grid gap-6 lg:grid-cols-3">
         {/* Top predicted */}

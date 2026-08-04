@@ -19,11 +19,29 @@ from app.db import Base
 
 
 class Season(Base):
+    """Mùa giải + luật của mùa đó, lấy nguyên văn từ FPL game_config.
+
+    Không ghi cứng tên mùa hay luật trong code: ingestion ghi vào đây, engine đọc
+    ra qua app.scoring.load_rules().
+    """
     __tablename__ = "seasons"
     id: Mapped[int] = mapped_column(primary_key=True)
-    name: Mapped[str] = mapped_column(String(16), unique=True)  # "2025/26"
+    name: Mapped[str] = mapped_column(String(16), unique=True)  # vd "2026/27"
     is_current: Mapped[bool] = mapped_column(Boolean, default=True)
     scoring_source: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # game_config nguyên văn (scoring + rules + settings)
+    rules_json: Mapped[str | None] = mapped_column(String, nullable=True)
+    # danh sách chip kèm khoảng gameweek (hai bộ cho hai nửa mùa)
+    chips_json: Mapped[str | None] = mapped_column(String, nullable=True)
+    # vân tay của luật; chỉ đổi khi FPL đổi luật
+    rules_version: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    # thời điểm luật thay đổi lần gần nhất (không phải mỗi lần đồng bộ)
+    rules_updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    fetched_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
 
 class Gameweek(Base):

@@ -66,7 +66,7 @@ class Settings(BaseSettings):
     # ---- Modelling ----
     projection_horizon: int = 8            # gameweeks the engine projects ahead
     montecarlo_iterations: int = 10_000
-    model_version: str = "xp-0.1.0"
+    model_version: str = "xp-0.3.0"
 
     @property
     def cors_list(self) -> list[str]:

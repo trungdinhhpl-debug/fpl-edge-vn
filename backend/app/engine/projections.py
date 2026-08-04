@@ -64,6 +64,11 @@ def build_projections(
     horizon: int | None = None,
     mc_iterations: int | None = None,
 ) -> dict:
+    # luật mùa hiện tại được nạp từ DB (ingestion lưu từ FPL game_config)
+    from app.scoring import load_rules
+
+    load_rules(db)
+
     horizon = horizon or settings.projection_horizon
     iters = min(mc_iterations or settings.montecarlo_iterations, 6000)
     rng = np.random.default_rng(42)

@@ -773,12 +773,13 @@ def _answer_optimal_xi(db: Session) -> dict:
 
 def _answer_rules(db: Session, question: str) -> dict:
     """Giải thích luật tính điểm mùa hiện tại (đọc từ cấu hình, không viết cứng)."""
-    from app.scoring import RULES, SEASON
+    from app import scoring
+    from app.scoring import RULES
 
     q = _norm(question)
     if _has(q, "defensive contribution", "defcon", "dong gop phong ngu"):
         return _ok(
-            f"**Defensive Contribution** (luật mới mùa {SEASON}): cầu thủ được "
+            f"**Defensive Contribution** (luật mới mùa {scoring.SEASON}): cầu thủ được "
             f"**+{RULES.defcon_points} điểm** khi đạt ngưỡng hành động phòng ngự trong trận.\n\n"
             f"- Hậu vệ: **{RULES.defcon_threshold_def}** lần (phá bóng, cản phá, cắt bóng, tắc bóng)\n"
             f"- Tiền vệ & tiền đạo: **{RULES.defcon_threshold_att}** lần (tính thêm cả thu hồi bóng)\n\n"
@@ -788,11 +789,11 @@ def _answer_rules(db: Session, question: str) -> dict:
     g = RULES.goal_points
     cs = RULES.clean_sheet_points
     return _ok(
-        f"**Luật tính điểm FPL mùa {SEASON}:**\n\n"
+        f"**Luật tính điểm FPL mùa {scoring.SEASON}:**\n\n"
         f"- Ra sân dưới 60′: **+{RULES.points_play_under_60}** · từ 60′ trở lên: **+{RULES.points_play_60_plus}**\n"
-        f"- Ghi bàn: thủ môn/hậu vệ **+{g[1]}**, tiền vệ **+{g[3]}**, tiền đạo **+{g[4]}**\n"
+        f"- Ghi bàn: thủ môn **+{g[1]}**, hậu vệ **+{g[2]}**, tiền vệ **+{g[3]}**, tiền đạo **+{g[4]}**\n"
         f"- Kiến tạo: **+{RULES.assist_points}**\n"
-        f"- Sạch lưới (cần 60′): thủ môn/hậu vệ **+{cs[1]}**, tiền vệ **+{cs[3]}**\n"
+        f"- Sạch lưới (cần 60′): thủ môn **+{cs[1]}**, hậu vệ **+{cs[2]}**, tiền vệ **+{cs[3]}**\n"
         f"- Thủ môn: cứ {RULES.saves_per_point} lần cứu thua **+1**, cản penalty **+{RULES.penalty_save_points}**\n"
         f"- Thủ môn/hậu vệ thủng lưới: cứ 2 bàn **{RULES.points_per_two_conceded}**\n"
         f"- Thẻ vàng **{RULES.yellow_card_points}** · thẻ đỏ **{RULES.red_card_points}** · "
@@ -802,6 +803,52 @@ def _answer_rules(db: Session, question: str) -> dict:
         "Toàn bộ hạng mục trên đều được tính trong mô hình xP.",
         suggestions=["Defensive Contribution là gì?", "Ai nên làm đội trưởng?"],
     )
+
+
+CHIP_VI = {
+    "wildcard": "Wildcard",
+    "freehit": "Free Hit",
+    "bboost": "Bench Boost",
+    "3xc": "Triple Captain",
+    "manager": "Assistant Manager",
+}
+
+
+def _answer_chips(db: Session) -> dict:
+    """Chip của mùa hiện tại — đọc từ FPL, gồm cả việc chia hai nửa mùa."""
+    import json
+
+    from sqlalchemy import select as _select
+
+    from app import scoring
+    from app.models import Season
+
+    season = db.scalar(_select(Season).where(Season.is_current.is_(True)))
+    if not season or not season.chips_json:
+        return _no_data("chưa đồng bộ được danh sách chip từ FPL")
+    try:
+        chips = json.loads(season.chips_json)
+    except ValueError:
+        return _no_data("dữ liệu chip không đọc được")
+
+    windows: dict[tuple[int, int], list[str]] = {}
+    for c in chips:
+        key = (c.get("start_event"), c.get("stop_event"))
+        windows.setdefault(key, []).append(CHIP_VI.get(c.get("name"), c.get("name")))
+
+    lines = [f"**Chip mùa {scoring.SEASON}:**", ""]
+    for (start, stop), names in sorted(windows.items(), key=lambda x: (x[0][0] or 0)):
+        uniq = sorted(set(names))
+        lines.append(f"- **GW{start}–{stop}:** {', '.join(uniq)}")
+    lines += [
+        "",
+        "→ Mùa này chip được chia thành **hai bộ cho hai nửa mùa**: bộ nửa đầu hết hạn "
+        "khi sang nửa sau, dùng không kịp là mất. Mỗi bộ có Wildcard, Free Hit, "
+        "Bench Boost và Triple Captain riêng.",
+        f"→ Bạn cũng được giữ tối đa **{scoring.GAME.max_free_transfers} free transfer**.",
+    ]
+    return _ok("\n".join(lines),
+               suggestions=["Có Double Gameweek nào không?", "Đội hình tối ưu là gì?"])
 
 
 def _answer_howto(db: Session) -> dict:
@@ -892,6 +939,13 @@ def answer_question(db: Session, question: str) -> dict:
 
     if _has(q, "giup", "help", "hoi gi", "cach dung", "su dung web", "team id o dau"):
         return _answer_howto(db) if _has(q, "cach dung", "su dung web", "team id") else _answer_help()
+
+    # chip
+    if _has(q, "chip", "bench boost", "triple captain", "wildcard", "free hit",
+            "assistant manager"):
+        # "Free Hit nên chọn ai" là hỏi đội hình, không phải hỏi luật chip
+        if not _has(q, "chon ai", "doi hinh", "toi uu", "xay doi"):
+            return _answer_chips(db)
 
     # luật tính điểm
     if _has(q, "luat", "tinh diem", "defensive contribution", "defcon", "duoc may diem",

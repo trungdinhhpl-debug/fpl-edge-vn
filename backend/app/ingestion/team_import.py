@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models import UserProfile
@@ -123,20 +123,35 @@ def _squad_status(db: Session, gw: int | None, picks: list, error: str | None) -
     if len(picks) == 15:
         return {"code": "ok", "gameweek": gw, "available_after": None, "message": ""}
 
+    # Từ 2026/27, đội hình chỉ mở sau khi vòng đấu KẾT THÚC (lockdown muộn hơn
+    # trước, không còn mở ngay sau hạn chót). Mốc chính xác = trận cuối của vòng
+    # kết thúc, ước tính bằng giờ bóng lăn trận cuối + 2 tiếng.
+    from datetime import timedelta
+
+    from app.models import Fixture
+
     deadline = None
+    unlock = None
     if gw:
         row = db.get(Gameweek, gw)
         if row and row.deadline_time:
             deadline = row.deadline_time.isoformat()
+        last_kick = db.scalar(
+            select(func.max(Fixture.kickoff_time)).where(Fixture.event == gw)
+        )
+        if last_kick:
+            unlock = (last_kick + timedelta(hours=2)).isoformat()
 
     if error == "not_public_yet":
         return {
-            "code": "hidden_until_deadline",
+            "code": "hidden_until_round_ends",
             "gameweek": gw,
-            "available_after": deadline,
+            "deadline": deadline,
+            "available_after": unlock or deadline,
             "message": (
-                f"FPL chỉ công khai đội hình sau hạn chót vòng {gw} (để không ai xem "
-                f"trước đội của bạn). Sau thời điểm đó, nhập lại Team ID là dùng được ngay."
+                f"FPL giữ kín đội hình của bạn cho tới khi vòng {gw} kết thúc "
+                f"(để không ai xem trước đội người khác). Sau trận cuối của vòng, "
+                f"nhập lại Team ID là tải được ngay."
             ),
         }
     return {
@@ -148,12 +163,17 @@ def _squad_status(db: Session, gw: int | None, picks: list, error: str | None) -
 
 
 def _estimate_free_transfers(events: list[dict]) -> int:
-    """Rough banked-FT estimate. 2025/26 allows up to 5 banked."""
+    """Ước lượng số free transfer đang có (API công khai không cho biết chính xác).
+
+    Trần lấy từ luật mùa hiện tại, không ghi cứng.
+    """
+    from app.scoring import GAME
+
+    cap = GAME.max_free_transfers
     if not events:
         return 1
     ft = 1
     for h in events:
         used = h.get("event_transfers", 0)
-        ft = min(5, ft + 1 - used)
-        ft = max(1, ft)
+        ft = max(1, min(cap, ft + 1 - used))
     return ft

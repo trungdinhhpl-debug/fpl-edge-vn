@@ -25,7 +25,6 @@ from app.models import (
 )
 from app.providers.expert_provider import ExpertProvider, compute_signal_score
 from app.providers.fpl_client import FPLClient
-from app.scoring import SCORING_SOURCE, SEASON
 
 
 # ------------------------------------------------------------- parse helpers --
@@ -60,18 +59,60 @@ def _log(db: Session, name: str, url: str, status: str, rows: int, detail: str =
     ))
 
 
+# -------------------------------------------------------- luật của mùa giải ----
+def sync_season_rules(db: Session, data: dict) -> dict:
+    """Lưu tên mùa + luật + chip từ `game_config`, rồi nạp vào engine.
+
+    Tên mùa và mọi giá trị tính điểm đều lấy từ API — không ghi cứng ở đâu cả.
+    `rules_updated_at` chỉ đổi khi vân tay luật đổi, nên biết chính xác luật có
+    hiệu lực từ bao giờ.
+    """
+    import json as _json
+
+    from app.scoring import SCORING_SOURCE, apply_config, rules_hash, season_from_config
+
+    gc = data.get("game_config") or {}
+    if not gc:
+        _log(db, "FPL game_config", "bootstrap-static", "error", 0,
+             "API không trả về game_config — engine dùng luật dự phòng", "official")
+        return {"ok": False}
+
+    name = season_from_config(gc) or "unknown"
+    version = rules_hash(gc)
+    now = datetime.now(timezone.utc)
+
+    season = db.scalar(select(Season).where(Season.name == name))
+    if season is None:
+        season = Season(name=name)
+        db.add(season)
+    changed = season.rules_version != version
+    season.is_current = True
+    season.scoring_source = SCORING_SOURCE
+    season.rules_json = _json.dumps(gc, ensure_ascii=False)
+    season.chips_json = _json.dumps(data.get("chips") or [], ensure_ascii=False)
+    season.rules_version = version
+    if changed or season.rules_updated_at is None:
+        season.rules_updated_at = now
+    season.fetched_at = now
+
+    # các mùa khác không còn là mùa hiện tại
+    for other in db.scalars(select(Season).where(Season.name != name)).all():
+        other.is_current = False
+
+    db.flush()
+    applied = apply_config(gc, name)
+    _log(db, "FPL game_config", "bootstrap-static", "ok", 1,
+         f"mùa {name}, luật {version}" + (" (ĐỔI LUẬT)" if changed else ""), "official")
+    return {"ok": True, "season": name, "rules_version": version, "changed": changed,
+            **applied}
+
+
 # ------------------------------------------------------------------ bootstrap --
 def sync_bootstrap(db: Session, client: FPLClient) -> dict:
     data = client.bootstrap_static()
     url = f"{settings.fpl_base_url}/bootstrap-static/"
 
-    # season — look up by name too: `name` is unique, so a row that exists but
-    # isn't flagged current would otherwise cause a duplicate-key insert.
-    season = db.scalar(select(Season).where(Season.is_current.is_(True)))
-    if not season:
-        season = db.scalar(select(Season).where(Season.name == SEASON))
-    if not season:
-        db.add(Season(name=SEASON, is_current=True, scoring_source=SCORING_SOURCE))
+    sync_season_rules(db, data)
 
     # gameweeks
     for ev in data.get("events", []):

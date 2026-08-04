@@ -32,6 +32,16 @@ async def lifespan(app: FastAPI):
     init_db()
     log.info("Database initialised (%s)", settings.database_url.split("://")[0])
 
+    # nạp luật mùa hiện tại đã lưu (không ghi cứng trong code)
+    try:
+        from app import scoring
+        with SessionLocal() as db:
+            info = scoring.load_rules(db)
+        log.info("Rules loaded: season=%s version=%s source=%s",
+                 info.get("season"), info.get("rules_version"), info.get("source"))
+    except Exception as exc:
+        log.warning("Could not load season rules (%s) — using fallback.", exc)
+
     if settings.auto_sync_on_startup and _db_is_empty():
         log.info("Empty DB detected — starting initial FPL sync in the background...")
 

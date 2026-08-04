@@ -22,7 +22,7 @@ from app.models import (
     SourceFetchLog,
     Team,
 )
-from app.scoring import SCORING_SOURCE, SEASON
+from app.scoring import SCORING_SOURCE
 
 TEAMS = [
     ("Arsenal Demo", "ARS", 1350),
@@ -46,7 +46,7 @@ def seed_demo(db: Session, n_finished: int = 4, n_gameweeks: int = 10) -> dict:
         db.execute(delete(model))
     db.commit()
 
-    db.add(Season(name=SEASON + " (DEMO)", is_current=True, scoring_source=SCORING_SOURCE))
+    db.add(Season(name="DEMO", is_current=True, scoring_source=SCORING_SOURCE))
 
     # gameweeks
     base = datetime(2025, 8, 15, 17, 30, tzinfo=timezone.utc)

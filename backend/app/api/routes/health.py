@@ -17,14 +17,14 @@ from app.models import (
     PlayerProjection,
     SourceFetchLog,
 )
-from app.scoring import SEASON
+from app import scoring
 
 router = APIRouter()
 
 
 @router.get("/health")
 def health() -> dict:
-    return {"status": "ok", "app": settings.app_name, "season": SEASON,
+    return {"status": "ok", "app": settings.app_name, "season": scoring.SEASON,
             "time": datetime.now(timezone.utc).isoformat()}
 
 
@@ -76,6 +76,94 @@ def model_health(db: Session = Depends(get_db)) -> dict:
         "projection_horizon": settings.projection_horizon,
         "last_projection_cutoff": latest.isoformat() if latest else None,
         "ready": n_proj > 0,
+    }
+
+
+def _by_pos_name(by_type: dict[int, int]) -> dict[str, int]:
+    """Đổi khoá element_type sang tên vị trí cho dễ đọc trong API."""
+    return {scoring.position_name(k): v for k, v in sorted(by_type.items())}
+
+
+@router.get("/meta/version")
+def meta_version(db: Session = Depends(get_db)) -> dict:
+    """Nguồn gốc & phiên bản của mọi thứ đang hiển thị.
+
+    Mùa giải và luật KHÔNG ghi cứng trong code — đọc từ bảng `seasons`, vốn được
+    ingestion lưu nguyên văn từ FPL `bootstrap-static.game_config`.
+    """
+    import json
+
+    from app.models import Season
+
+    # nạp lại từ DB mỗi lần gọi: rẻ (1 truy vấn) và đảm bảo tiến trình chạy lâu
+    # vẫn báo đúng luật hiện hành sau khi FPL đổi luật giữa mùa
+    scoring.load_rules(db)
+    season = db.scalar(select(Season).where(Season.is_current.is_(True)))
+    last_data = db.scalar(
+        select(func.max(SourceFetchLog.fetched_at)).where(
+            SourceFetchLog.source_name.like("FPL%")
+        )
+    )
+    last_model = db.scalar(select(func.max(PlayerProjection.data_cutoff)))
+
+    chips: list[dict] = []
+    if season and season.chips_json:
+        try:
+            raw = json.loads(season.chips_json)
+            for c in raw:
+                chips.append({
+                    "name": c.get("name"),
+                    "type": c.get("chip_type"),
+                    "start_event": c.get("start_event"),
+                    "stop_event": c.get("stop_event"),
+                })
+        except ValueError:
+            chips = []
+
+    # hai bộ chip cho hai nửa mùa: gom theo khoảng gameweek
+    halves: dict[str, list[str]] = {}
+    for c in chips:
+        key = f"GW{c['start_event']}–{c['stop_event']}"
+        halves.setdefault(key, []).append(c["name"])
+
+    return {
+        "season": scoring.SEASON,
+        "season_source": season.scoring_source if season else "fallback",
+        "rules_version": scoring.RULES_VERSION,
+        "rules_updated_at": (
+            season.rules_updated_at.isoformat()
+            if season and season.rules_updated_at else None
+        ),
+        "rules_source": scoring.RULES.source,
+        "projection_version": settings.model_version,
+        "last_data_update": last_data.isoformat() if last_data else None,
+        "last_model_run": last_model.isoformat() if last_model else None,
+        "scoring": {
+            "goal_points": _by_pos_name(scoring.RULES.goal_points),
+            "clean_sheet_points": _by_pos_name(scoring.RULES.clean_sheet_points),
+            "assist_points": scoring.RULES.assist_points,
+            "defensive_contribution": _by_pos_name(scoring.RULES.defcon_points_by_pos),
+            "defcon_thresholds": {
+                "DEF": scoring.RULES.defcon_threshold_def,
+                "MID_FWD": scoring.RULES.defcon_threshold_att,
+            },
+            "saves_per_point": scoring.RULES.saves_per_point,
+        },
+        "squad_rules": {
+            "squad_size": scoring.GAME.squad_size,
+            "starting_xi": scoring.GAME.squad_play,
+            "max_per_club": scoring.GAME.team_limit,
+            "budget": scoring.GAME.total_spend / 10,
+            "max_free_transfers": scoring.GAME.max_free_transfers,
+            "sell_on_fee": scoring.GAME.sell_on_fee,
+        },
+        "chips": chips,
+        "chip_windows": halves,
+        "note": (
+            "Ngưỡng Defensive Contribution và số lần cứu thua cho mỗi điểm không có "
+            "trong API nên được giữ trong cấu hình; mọi giá trị còn lại đọc trực tiếp "
+            "từ FPL game_config."
+        ),
     }
 
 

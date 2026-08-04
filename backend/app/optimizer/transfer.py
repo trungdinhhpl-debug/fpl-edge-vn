@@ -14,7 +14,6 @@ from dataclasses import dataclass, field
 import pulp
 
 from app.optimizer.constraints import (
-    MAX_BANKED_FT,
     MAX_PER_CLUB,
     SQUAD_BY_TYPE,
     TRANSFER_HIT_COST,
@@ -153,7 +152,11 @@ def long_term_plan(
     tin = pulp.LpVariable.dicts("tin", (ids, T), cat="Binary")
     tout = pulp.LpVariable.dicts("tout", (ids, T), cat="Binary")
     hits = pulp.LpVariable.dicts("hits", T, lowBound=0, cat="Integer")
-    ft = pulp.LpVariable.dicts("ft", T, lowBound=1, upBound=MAX_BANKED_FT)
+    # trần free transfer lấy từ luật mùa hiện tại (FPL game_config)
+    from app.scoring import GAME
+
+    max_ft = GAME.max_free_transfers
+    ft = pulp.LpVariable.dicts("ft", T, lowBound=1, upBound=max_ft)
 
     # objective
     obj = []
@@ -199,7 +202,7 @@ def long_term_plan(
         n_tr = pulp.lpSum(tout[i][t] for i in ids)
         prob += hits[t] >= n_tr - ft[t]
         if k == 0:
-            prob += ft[t] == min(free_transfers, MAX_BANKED_FT)
+            prob += ft[t] == min(free_transfers, max_ft)
         else:
             prob += ft[t] <= ft[T[k - 1]] - pulp.lpSum(tout[i][T[k - 1]] for i in ids) + 1
     prob += pulp.lpSum(hits[t] for t in T) <= max_hits_total
