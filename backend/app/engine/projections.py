@@ -109,6 +109,13 @@ def build_projections(
     for s in stats:
         recent_minutes[s.player_id].append(s.minutes)
 
+    # How far last season still describes each player (new club / new manager).
+    # Neither is in the FPL API, so this comes from a configured list.
+    from app.services.season_state import prior_reliability as _prior_rel
+
+    _team_short = {t.id: t.short_name for t in teams}
+    prior_rel = {p.id: _prior_rel(p, _team_short.get(p.team_id)) for p in players}
+
     fx_by_gw = _fixtures_by_gw(fixtures)
     start_gw = get_planning_start_gw(db)
     gws = [gw for gw in range(start_gw, start_gw + horizon) if gw <= 38]
@@ -176,6 +183,7 @@ def build_projections(
                         n_fixtures_this_gw=1,  # per-fixture; DGW handled by summing
                         no_pl_history=team.id in no_history_teams,
                         role_rank=role_rank.get(p.id),
+                        prior_reliability=prior_rel.get(p.id, 1.0),
                     )
                     bd = expected_points(
                         element_type=p.element_type,

@@ -64,6 +64,18 @@ class Settings(BaseSettings):
     # cannot identify it. Set 0 to fall back to an independent double-Poisson.
     odds_dixon_coles_rho: float = -0.13
 
+    # ---- Pre-season down-weighting ----
+    # The FPL API publishes neither managers nor transfer history, so a club that
+    # changed manager and a player who changed club cannot be detected from it.
+    # These lists are maintained by hand; an empty list means NOBODY HAS TOLD US,
+    # which season_state reports explicitly rather than implying nothing changed.
+    new_manager_clubs: str = ""      # club short names, e.g. "TOT,MUN"
+    new_signing_players: str = ""    # FPL player ids, e.g. "427,481"
+    # How far last season's sample still describes the player. Lower = the
+    # minutes model shrinks harder toward the positional prior.
+    prior_weight_new_manager: float = 0.6
+    prior_weight_new_signing: float = 0.4
+
     # Understat (optional, Phase 2). Empty => rely on FPL's own xG/xA.
     understat_enabled: bool = False
 

@@ -18,6 +18,48 @@ xMins     = P(start)·84' + P(sub)·20'      # ×2 nếu Double GW
 **lý do chính** (nailed / rotation / availability / congestion). Confidence:
 `High` khi mẫu lớn & ổn định, `Low` khi có cờ chấn thương hoặc mẫu nhỏ.
 
+### 1b. Chế độ tiền mùa (`services/season_state.py`)
+
+Một dự báo làm trước khi bóng lăn và một dự báo làm giữa tháng 12 không phải cùng
+loại tuyên bố, nhưng nếu trang hiển thị giống hệt nhau thì người đọc sẽ coi chúng
+như nhau. Phase được tính từ dữ liệu thật và gắn nhãn ở **mọi trang**:
+
+| Phase | Điều kiện | Nhãn | Confidence |
+|---|---|---|---|
+| `preseason` | 0 trận đã đá | **PRE-SEASON PROJECTION** | Low |
+| `early` | đội nhiều nhất < 6 trận | EARLY-SEASON PROJECTION | Medium |
+| `established` | từ 6 trận trở lên | (không nhãn) | High |
+
+Tỷ lệ "dựa trên prior" được đếm bằng **phần bù** — số dự báo KHÔNG nhắc tới trận
+gần đây — chứ không bằng cách khớp một cụm từ. Bản đầu khớp chuỗi "season
+averages" và báo 64% trong tuần chưa đá trận nào; nó bỏ sót cầu thủ đội mới lên
+hạng và cầu thủ đang dính cờ chấn thương, vốn cũng hoàn toàn là prior. Đếm phần
+bù cho ra **100%**, là con số đúng.
+
+### Giảm trọng số dữ liệu mùa trước
+
+Với `prior_reliability = r`, phần `(1 − r)` số trận mùa trước được **thay bằng
+mức nền vị trí**:
+
+```
+prior_games = PRIOR_GAMES + games_ref · (1 − r)
+start_rate  = (season_starts + prior_games · PRIOR_START_RATE) / (games_ref + prior_games)
+```
+
+Chỉ nhân `PRIOR_GAMES` lên là **đòn bẩy quá yếu**: 2 trận tưởng tượng so với mẫu
+38 trận chỉ dịch p_start của một trụ cột đổi đội đúng 2 điểm %. Buộc prior tỷ lệ
+với chính mẫu thì mới thật sự pha loãng — tân binh từ 0.77 xuống 0.66.
+
+Quan trọng: giảm trọng số kéo về **mức nền theo cả hai chiều**. Trụ cột đổi đội bị
+kéo xuống (0.77 → 0.66), còn cầu thủ dự bị đổi đội được kéo **lên** (0.17 → 0.27).
+Nếu chỉ có kéo xuống thì đó là hình phạt, không phải tái cân trọng số.
+
+**Ai bị giảm trọng số:** FPL API không công bố huấn luyện viên hay lịch sử chuyển
+nhượng, nên `NEW_MANAGER_CLUBS` và `NEW_SIGNING_PLAYERS` phải khai bằng tay.
+Danh sách rỗng được báo cáo rõ là **"chưa ai khai"**, không bao giờ hiểu thành
+"không có ai đổi đội". Riêng cầu thủ 0 phút Ngoại hạng thì phát hiện tự động và
+đã ước lượng theo vai trò/giá từ trước.
+
 ## 2. Expected Points (xP) — theo vị trí
 
 ```

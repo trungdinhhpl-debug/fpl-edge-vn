@@ -139,9 +139,14 @@ def meta_version(db: Session = Depends(get_db)) -> dict:
         key = f"GW{c['start_event']}–{c['stop_event']}"
         halves.setdefault(key, []).append(c["name"])
 
+    from app.services.season_state import season_state
+
     return {
         "season": scoring.SEASON,
         "season_source": season.scoring_source if season else "fallback",
+        # Every page renders this, so the phase label travels with the numbers:
+        # a pre-season projection and a December one must not look alike.
+        "season_state": season_state(db),
         "rules_version": scoring.RULES_VERSION,
         "rules_updated_at": (
             season.rules_updated_at.isoformat()

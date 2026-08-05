@@ -120,6 +120,7 @@ def estimate_minutes(
     n_fixtures_this_gw: int = 1,
     no_pl_history: bool = False,
     role_rank: int | None = None,
+    prior_reliability: float = 1.0,
 ) -> MinutesEstimate:
     avail_mult, avail_reason = _availability_multiplier(status, chance_of_playing)
 
@@ -129,10 +130,23 @@ def estimate_minutes(
     # treated as a nailed starter. Once the season is under way, use games played.
     games_ref = 38 if team_matches_played <= 0 else team_matches_played
 
-    # season start & appearance rates, smoothed toward a neutral prior so a
-    # one-game sample can't read as certainty in either direction
+    # Season start & appearance rates, smoothed toward a neutral prior so a
+    # one-game sample can't read as certainty in either direction.
+    #
+    # `prior_reliability` < 1 means last season describes this player less well
+    # (he changed club, or his manager did). Rather than discarding the sample,
+    # replace the share we no longer believe with the positional baseline: at
+    # reliability r, (1 - r) of last season's games are swapped for prior games.
+    #
+    # Scaling PRIOR_GAMES alone is far too weak a lever — 2 imaginary games
+    # against a 38-game sample moved a transferred starter's p_start by two
+    # percentage points, which is not "reducing the weight" in any real sense.
+    # Tying the prior to the sample size makes the dilution actually bite:
+    # a new signing drops from ~0.77 to ~0.66.
+    rel = max(0.1, min(1.0, prior_reliability))
+    prior_games = PRIOR_GAMES + games_ref * (1.0 - rel)
     start_rate = min(
-        (season_starts + PRIOR_GAMES * PRIOR_START_RATE) / (games_ref + PRIOR_GAMES), 1.0
+        (season_starts + prior_games * PRIOR_START_RATE) / (games_ref + prior_games), 1.0
     )
     appearances = 0
     if recent_minutes:
@@ -142,7 +156,7 @@ def estimate_minutes(
     # otherwise an unused player looks identical to a regular substitute.
     est_appearances = max(appearances, math.ceil(season_minutes / 75.0))
     appear_rate = min(
-        (est_appearances + PRIOR_GAMES * PRIOR_APPEAR_RATE) / (games_ref + PRIOR_GAMES), 1.0
+        (est_appearances + prior_games * PRIOR_APPEAR_RATE) / (games_ref + prior_games), 1.0
     )
 
     # Không có phút Ngoại hạng nào (đội mới lên hạng, hoặc tân binh từ giải khác)

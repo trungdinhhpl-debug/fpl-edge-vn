@@ -4,6 +4,7 @@ import { Providers } from "./providers";
 import { Nav } from "@/components/nav";
 import { ChatWidget } from "@/components/chat-widget";
 import { VersionBar } from "@/components/version-bar";
+import { SeasonBanner } from "@/components/season-banner";
 
 export const metadata: Metadata = {
   title: "FPL Edge VN — Quyết định FPL dựa trên dữ liệu",
@@ -17,7 +18,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body>
         <Providers>
           <Nav />
-          <main className="mx-auto max-w-7xl px-4 py-6">{children}</main>
+          <main className="mx-auto max-w-7xl px-4 py-6">
+            <SeasonBanner />
+            {children}
+          </main>
           <footer className="mx-auto max-w-7xl space-y-3 px-4 py-8 text-xs text-muted-foreground">
             <VersionBar />
             <p>
