@@ -48,11 +48,53 @@ def _observed(db):
     ) or 0
 
 
-def test_empty_downweight_lists_read_as_unknown_not_as_none(db):
+def test_empty_downweight_lists_read_as_unknown_not_as_none(db, monkeypatch):
     """An unfilled list means nobody told us, never 'nothing changed'."""
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "new_manager_clubs", "")
+    monkeypatch.setattr(settings, "new_signing_players", "")
     dw = season_state(db)["downweighting"]
     assert dw["configured"] is False
     assert "CHƯA AI KHAI" in dw["note"]
+
+
+def test_configured_lists_are_reported_back(db):
+    """What is actually being down-weighted must be visible, not implicit."""
+    dw = season_state(db)["downweighting"]
+    assert dw["configured"] is True
+    assert dw["new_manager_clubs"], "2026/27 manager list should be populated"
+    assert dw["new_signing_players"], "2026/27 signing list should be populated"
+
+
+def test_configured_entries_are_well_formed(db):
+    """A typo silently down-weights nobody, so at least check the shape."""
+    dw = season_state(db)["downweighting"]
+    for code in dw["new_manager_clubs"]:
+        assert code.isalpha() and 2 <= len(code) <= 4, code
+    for pid in dw["new_signing_players"]:
+        assert pid.isdigit(), pid
+
+
+def test_configured_entries_match_a_real_dataset(db):
+    """Only meaningful against real FPL data — the demo DB has 6 invented clubs.
+
+    Skipped rather than weakened: an assertion that passes on demo data would
+    give false assurance about the production config, which is the only place
+    a typo actually costs anything.
+    """
+    from sqlalchemy import select
+
+    from app.models import Player, Team
+
+    clubs = {t.short_name.upper() for t in db.scalars(select(Team)).all()}
+    if len(clubs) < 20:
+        pytest.skip("demo dataset — run against a synced database to check config")
+
+    dw = season_state(db)["downweighting"]
+    assert not [c for c in dw["new_manager_clubs"] if c not in clubs]
+    known = {str(p.id) for p in db.scalars(select(Player)).all()}
+    assert not [p for p in dw["new_signing_players"] if p not in known]
 
 
 def test_thresholds_are_exposed_for_the_ui(db):

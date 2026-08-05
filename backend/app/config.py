@@ -69,8 +69,30 @@ class Settings(BaseSettings):
     # changed manager and a player who changed club cannot be detected from it.
     # These lists are maintained by hand; an empty list means NOBODY HAS TOLD US,
     # which season_state reports explicitly rather than implying nothing changed.
-    new_manager_clubs: str = ""      # club short names, e.g. "TOT,MUN"
-    new_signing_players: str = ""    # FPL player ids, e.g. "427,481"
+    # Defaults below are the 2026/27 lists, verified 2026-08-05. They are
+    # season-specific data living in code because no API provides them; replace
+    # them each season, or override per-environment with the env vars.
+    #
+    # New managers (Premier League official manager line-up + Flashscore, plus
+    # Sky/NBC for Newcastle):
+    #   BOU Marco Rose · CHE Xabi Alonso · COV Frank Lampard · CRY Pierre Sage
+    #   FUL Alvaro Arbeloa · HUL Sergej Jakirovic · IPS Gary O'Neil
+    #   LIV Andoni Iraola · MCI Enzo Maresca · NEW Matthias Jaissle
+    #   NFO Oliver Glasner · TOT Roberto De Zerbi (bổ nhiệm 31/03/2026, tức phần
+    #   lớn mẫu mùa trước vẫn dưới HLV khác)
+    new_manager_clubs: str = "BOU,CHE,COV,CRY,FUL,HUL,IPS,LIV,MCI,NEW,NFO,TOT"
+    # Players who moved BETWEEN Premier League clubs in summer 2026. Arrivals
+    # from abroad are deliberately absent: they have zero Premier League minutes
+    # and the model already estimates them by role. Every id below was
+    # cross-checked against live FPL data — each player's current club matches
+    # the reported destination, so the list is not taken on the report's word.
+    #   43 Tielemans AVL→MUN · 162 Andrey Santos CHE→MUN · 325 Darlow LEE→MUN
+    #   455 Tonali NEW→TOT · 112 Van Hecke BHA→TOT · 498 Senesi BOU→TOT
+    #   40 Rogers AVL→CHE · 136 Welbeck BHA→CHE · 101 Henderson BRE→CHE
+    #   200 Lacroix CRY→CHE · 481 Anderson NFO→MCI · 104 Onyeka BRE→COV
+    #   259 Diop FUL→IPS · 260 Wilson FUL→LEE
+    new_signing_players: str = ("43,162,325,455,112,498,40,136,101,200,481,"
+                                "104,259,260")
     # How far last season's sample still describes the player. Lower = the
     # minutes model shrinks harder toward the positional prior.
     prior_weight_new_manager: float = 0.6
