@@ -31,6 +31,81 @@ class MCPlayer:
     bonus_base: float       # expected bonus at full involvement
 
 
+# A single player may never be credited with more than this share of the pool,
+# however few team-mates are on the pitch alongside him.
+MAX_INDIVIDUAL_SHARE = 0.95
+# Ceiling on how far an absent player's share may inflate those who did play.
+MAX_SHARE_TRANSFER = 3.0
+
+
+def _effective_shares(
+    players: list[MCPlayer], played: dict[int, np.ndarray], attr: str, n: int
+) -> tuple[dict[int, np.ndarray], float]:
+    """Per-simulation shares, with an absent player's share passed to the rest.
+
+    The old code simply zeroed a missing player's goals, so his share of the
+    team's output evaporated: a team-mate's expected points were byte-identical
+    whether the first-choice striker started 95% or 5% of the time. Understudies
+    were therefore under-rated by construction. Here the shares of whoever
+    actually took the pitch are scaled back up to the full squad total, which
+    hands the absentee's share to his replacements in proportion.
+    """
+    full = sum(getattr(p, attr) for p in players)
+    if full <= 1e-9:
+        return {p.player_id: np.zeros(n) for p in players}, 0.0
+
+    present = np.zeros(n)
+    for p in players:
+        present += getattr(p, attr) * played[p.player_id]
+    scale = np.where(present > 1e-9, full / np.maximum(present, 1e-9), 0.0)
+    scale = np.minimum(scale, MAX_SHARE_TRANSFER)
+
+    eff = {
+        p.player_id: np.minimum(
+            getattr(p, attr) * scale * played[p.player_id], MAX_INDIVIDUAL_SHARE
+        )
+        for p in players
+    }
+    return eff, full
+
+
+def _allocate(
+    totals: np.ndarray,
+    eff: dict[int, np.ndarray],
+    order: list[int],
+    rng: np.random.Generator,
+    cap: dict[int, np.ndarray] | None = None,
+) -> dict[int, np.ndarray]:
+    """Split `totals` among players by drawing conditional binomials in turn.
+
+    This is a multinomial sampled sequentially, which numpy can vectorise while
+    `rng.multinomial` cannot (both the count and the probability vector vary per
+    simulation). Drawing each player independently — as the old code did — let
+    the parts exceed the whole: 20.9% of simulated matches allocated more goals
+    than the team had scored, once handing out 14 goals in a 4-goal match. The
+    mean was right; the tail was not, and the tail is exactly where P(haul) and
+    the ceiling are read off.
+
+    The pool starts at 1.0 rather than at the sum of shares, so goals nobody in
+    the modelled squad is credited with (own goals, fringe players excluded from
+    the simulation) stay unattributed instead of being forced onto the last
+    player in the list.
+    """
+    remaining = totals.astype(np.int64).copy()
+    pool = np.ones(len(remaining))
+    out: dict[int, np.ndarray] = {}
+    for pid in order:
+        share = eff[pid]
+        prob = np.divide(share, pool, out=np.zeros_like(share), where=pool > 1e-9)
+        np.clip(prob, 0.0, 1.0, out=prob)
+        available = remaining if cap is None else np.minimum(remaining, cap[pid])
+        drawn = rng.binomial(np.maximum(available, 0), prob)
+        out[pid] = drawn
+        remaining -= drawn
+        pool = np.maximum(pool - share, 0.0)
+    return out
+
+
 def simulate_fixture(
     players: list[MCPlayer],
     lam_for: float,
@@ -44,33 +119,48 @@ def simulate_fixture(
     clean_sheet = team_conceded == 0
     conceded_penalty = -(team_conceded // 2)
 
-    out: dict[int, np.ndarray] = {}
+    # ---- who is on the pitch, drawn once and reused by every stage ----
+    started_by: dict[int, np.ndarray] = {}
+    subbed_by: dict[int, np.ndarray] = {}
+    played_by: dict[int, np.ndarray] = {}
     for p in players:
         r = rng.random(n)
-        started = r < p.p_start
-        subbed = (r >= p.p_start) & (r < p.p_start + p.p_sub)
-        played = started | subbed
+        st = r < p.p_start
+        sb = (r >= p.p_start) & (r < p.p_start + p.p_sub)
+        started_by[p.player_id] = st
+        subbed_by[p.player_id] = sb
+        played_by[p.player_id] = st | sb
+
+    # ---- share out the team's goals, then its assists ----
+    order = [p.player_id for p in players]
+    goal_eff, _ = _effective_shares(players, played_by, "share_goal", n)
+    goals_by = _allocate(team_goals, goal_eff, order, rng)
+
+    # A player cannot assist his own goal, so each is limited to the goals his
+    # team-mates scored. The old draw was independent of the goal draw entirely,
+    # which credited the same player with both on 26% of simulated matches.
+    assist_eff, _ = _effective_shares(players, played_by, "share_assist", n)
+    assist_cap = {
+        pid: np.maximum(team_goals - goals_by[pid], 0) for pid in order
+    }
+    assists_by = _allocate(team_goals, assist_eff, order, rng, cap=assist_cap)
+
+    out: dict[int, np.ndarray] = {}
+    for p in players:
+        started = started_by[p.player_id]
+        subbed = subbed_by[p.player_id]
+        played = played_by[p.player_id]
         pts = np.zeros(n, dtype=float)
 
         # appearance
         pts += np.where(started, RULES.points_play_60_plus, 0.0)
         pts += np.where(subbed, RULES.points_play_under_60, 0.0)
 
-        # goals — binomial share of the team's goals (only if played)
-        if p.share_goal > 0:
-            g = rng.binomial(team_goals, min(p.share_goal, 0.95))
-            g = np.where(played, g, 0)
-            pts += g * RULES.goal_points.get(p.element_type, 4)
-        else:
-            g = np.zeros(n)
+        g = goals_by[p.player_id]
+        pts += g * RULES.goal_points.get(p.element_type, 4)
 
-        # assists
-        if p.share_assist > 0:
-            a = rng.binomial(team_goals, min(p.share_assist, 0.6))
-            a = np.where(played, a, 0)
-            pts += a * RULES.assist_points
-        else:
-            a = np.zeros(n)
+        a = assists_by[p.player_id]
+        pts += a * RULES.assist_points
 
         # clean sheet (needs a start ~ 60'+)
         cs_pts = RULES.clean_sheet_points.get(p.element_type, 0)

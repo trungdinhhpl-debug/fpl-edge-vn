@@ -128,35 +128,35 @@ export default function MethodologyPage() {
               <b>Là xG share, không phải npxG hay shot share</b> — FPL không tách npxG nên
               phần xG từ chấm 11m nằm luôn trong share.
             </p>
+            <p>
+              Tổng bàn được chia theo <b>Multinomial</b>, nên phần chia ra không bao giờ vượt
+              số bàn đội thực ghi. Share của cầu thủ <b>không ra sân được chuyển cho những
+              người có mặt</b> theo tỷ lệ, và <b>không ai kiến tạo cho bàn của chính mình</b>.
+            </p>
+            <p>
+              Tương quan đồng đội tuỳ theo họ <i>chia sẻ</i> hay <i>cạnh tranh</i>:
+              GK ↔ hậu vệ <b>+0,61</b> (cùng một clean sheet), còn hai tiền đạo{" "}
+              <b>−0,05</b> (chia nhau cùng số bàn, và người này vắng thì người kia được nhiều hơn).
+            </p>
+            <p>
+              <b>xP không đến từ Monte Carlo</b> — xP tính giải tích; mô phỏng chỉ sinh ra
+              ceiling, floor, P(haul), phương sai.
+            </p>
             <details className="rounded-md border p-2">
               <summary className="cursor-pointer text-xs font-medium text-foreground">
-                Giới hạn đã biết của phần phân bổ (5 điểm)
+                Còn lại 2 giới hạn chưa xử lý
               </summary>
               <ul className="mt-2 space-y-1.5 text-xs">
                 <li>
-                  <b>Penalty không tách riêng trong mô phỏng.</b> Không có phép rút riêng cho
-                  quả 11m, nên upside của người đá phạt đền bị hoà vào share bóng sống →
-                  thiếu đuôi phải.
+                  <b>Penalty chưa tách riêng.</b> FPL cho <code>penalties_missed</code> nhưng
+                  không cho <code>penalties_scored</code> và không cho npxG, nên không tách
+                  được phần xG từ chấm 11m mà không áp một giả định trung bình giải cho mọi
+                  người đá 11m. Upside riêng của họ vẫn hoà trong share bóng sống.
                 </li>
                 <li>
-                  <b>Bàn chia ra không bảo toàn theo tổng của đội.</b> Khi đã biết tổng bàn,
-                  phần chia cho từng người là các Binomial độc lập chứ không phải Multinomial:
-                  đo được <b>20,9%</b> số trận chia ra nhiều bàn hơn số đội thực ghi. Kỳ vọng
-                  trung bình vẫn đúng, sai lệch nằm ở hình dạng đuôi.
-                </li>
-                <li>
-                  <b>Share của cầu thủ không ra sân bị vứt, không chuyển cho ai.</b> Điểm
-                  trung bình của đồng đội y hệt nhau dù trụ cột có P(start) 95% hay 10% → cầu
-                  thủ dự bị/người thay thế bị đánh giá thấp một cách hệ thống.
-                </li>
-                <li>
-                  <b>Kiến tạo rút độc lập với bàn thắng</b>, nên một người có thể được tính
-                  kiến tạo cho chính bàn mình ghi (<b>26%</b> số trận trong phép đo).
-                </li>
-                <li>
-                  <b>Double Gameweek:</b> hai trận rút độc lập (tương quan +0,0003) → có mô
-                  phỏng biến động xoay tua, nhưng <b>không</b> biểu diễn &ldquo;nghỉ trận 1
-                  nên dễ đá trận 2&rdquo; và không có yếu tố mệt mỏi.
+                  <b>Double Gameweek không mô phỏng rotation.</b> Hai trận rút độc lập (tương
+                  quan +0,0003) → có biến động xoay tua, nhưng không biểu diễn &ldquo;nghỉ
+                  trận 1 nên dễ đá trận 2&rdquo; và không có yếu tố mệt mỏi.
                 </li>
               </ul>
             </details>
