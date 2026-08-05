@@ -141,18 +141,101 @@ Vài điểm cần biết:
 - Sai số khớp cuối cùng được ghi vào log đồng bộ. Sai số lớn nghĩa là ba thị
   trường mâu thuẫn nhau nhiều hơn mức một mô hình tỷ số có thể dung hòa.
 
-## 3. Monte Carlo
+## 3. Monte Carlo — phân bổ bàn thắng cho cầu thủ
 
-Mô phỏng ở cấp **trận đấu của đội** để giữ tương quan:
+Mô phỏng ở cấp **trận đấu của đội**, mỗi vòng lặp rút một lần tổng bàn thắng và
+tổng bàn thua, rồi mới chia cho cầu thủ:
 
 ```
-team_goals    ~ Poisson(λ_for)      # dùng chung cho các cầu thủ cùng đội
-team_conceded ~ Poisson(λ_against)  # clean sheet dùng chung GK + hậu vệ
-player_goals  ~ Binomial(team_goals, share_goal)   # share = xG cầu thủ / xG đội
+team_goals    ~ Poisson(λ_for)       # dùng chung cho mọi cầu thủ cùng đội
+team_conceded ~ Poisson(λ_against)   # clean sheet dùng chung GK + hậu vệ
+player_goals   ~ Binomial(team_goals, share_goal)
+player_assists ~ Binomial(team_goals, share_assist)
 ```
 
-→ phân phối điểm mỗi cầu thủ: mean, median, P25/P75/P90, ceiling (P95),
-P(blank ≤2), P(≥5), P(≥10 = haul), phương sai. Không giả định cầu thủ độc lập.
+### Share được tính thế nào
+
+```
+share_goal   = xG cầu thủ  / Σ xG cả đội      (số liệu cả mùa)
+share_assist = xA cầu thủ  / Σ xG cả đội
+```
+
+Cả hai lấy **xG của FPL**, tức là **share theo xG chứ không phải npxG, và cũng
+không phải shot share**. Mẫu số của share_assist là tổng **xG** (không phải xA)
+— đúng về thứ nguyên, vì phép rút là trên `team_goals` mà kỳ vọng của nó xấp xỉ
+xG của đội: cầu thủ có xA 8 trong đội xG 60, với λ 1.5, tái tạo 7.6 kiến tạo cả
+mùa. Đổi sang mẫu số xA sẽ thổi phồng lên ~10.
+
+### Sáu câu hỏi, sáu câu trả lời thẳng
+
+**1. npxG share hay shot share?** → **xG share, ĐÃ BAO GỒM penalty.** FPL không
+tách npxG trong `bootstrap-static`, nên phần xG từ chấm 11m nằm luôn trong share.
+
+**2. Penalty tách riêng thế nào?** → **Trong Monte Carlo thì KHÔNG tách.** Không
+có phép rút riêng cho quả phạt đền. `penalties_order` chỉ được dùng ở nơi khác
+(hệ số `pen_bump` trong xP, và cột "Đá phạt đền" ở trang Đội trưởng). Hệ quả:
+phần upside riêng của người đá 11m bị hoà tan vào share bóng sống, nên phân phối
+điểm của họ **hơi thiếu đuôi phải** so với thực tế.
+
+**3. Assist phân phối thế nào?** → Rút Binomial trên `team_goals`, **độc lập với
+phép rút bàn thắng**. Nghĩa là cùng một cầu thủ có thể vừa được tính ghi bàn vừa
+được tính kiến tạo trong cùng một trận: đo trên 200k vòng lặp với share 0.35/0.30
+thì **26.0%** số trận rơi vào tình huống đó, và **8.2%** số trận có
+(bàn + kiến tạo) của riêng một người **vượt quá tổng bàn của cả đội**.
+
+**4. Cầu thủ không đá thì share chuyển cho ai?** → **Không cho ai cả — share bị
+vứt đi.** Bàn thắng đã rút cho người không ra sân bị gán 0 (`np.where(played, g, 0)`)
+chứ không phân phối lại. Đo được: điểm trung bình của một tiền đạo cùng đội **y
+hệt nhau** (4.5102) dù người kia có P(start) 95% hay 10%. Hệ quả: cầu thủ dự bị /
+người thay thế bị **đánh giá thấp một cách hệ thống** — họ không bao giờ được
+thừa hưởng phần của trụ cột nghỉ.
+
+**5. Hai cầu thủ cùng đội tương quan ra sao?** → Tương quan **dương, nhưng chỉ
+qua biến chung `team_goals` / `team_conceded`**. Khi đã biết `team_goals`, phần
+chia cho từng người là các Binomial **độc lập**, không phải một phân phối
+Multinomial trên đúng số bàn đó. Hệ quả là **tổng bàn chia ra không bảo toàn**:
+đo được **20.9%** số trận chia ra nhiều bàn hơn số đội thực sự ghi; trường hợp
+tệ nhất trong 200k vòng là đội ghi 4 nhưng chia ra 14. Kỳ vọng trung bình vẫn
+đúng (1.620 so với λ·Σshare = 1.620) — sai lệch nằm ở **hình dạng đuôi**, tức
+chính chỗ mà P(haul) và ceiling được đọc ra.
+
+**6. Double Gameweek có mô phỏng rotation không?** → Mỗi trận rút `p_start`
+**độc lập** bằng một lần `rng.random(n)` riêng, rồi cộng điểm hai trận. Nên có
+mô phỏng *biến động* (đá trận này, nghỉ trận kia), nhưng **không có tương quan**
+giữa hai trận: đo được hệ số tương quan **+0.0003**. Mô hình vì thế **không**
+biểu diễn "nghỉ trận 1 nên nhiều khả năng đá trận 2", cũng không có yếu tố mệt
+mỏi hay xoay tua theo lịch.
+
+### Đầu ra
+
+Phân phối điểm mỗi cầu thủ → mean, median, P25/P75/P90, ceiling (P95),
+P(blank ≤2), P(≥5), P(≥10), P(≥15), phương sai.
+
+### Một lỗi đã sửa khi rà phần này
+
+Điểm cứu thua của thủ môn dùng `np.where(started, 1.0, 0.3)`, mà hệ số 0.3 vốn
+dành cho thủ môn **vào sân từ ghế** lại áp cho cả thủ môn **không ra sân**. Một
+thủ môn dự bị vĩnh viễn vẫn ăn trung bình **0.064 điểm/trận** từ những pha cứu
+thua không thể có — nhỏ, nhưng nó âm thầm làm mọi thủ môn dự bị giá rẻ trông tốt
+hơn thực tế trong bài toán tối ưu. Đã sửa và có test chặn.
+
+### Giới hạn đã biết của phần này
+
+Bốn điểm 2, 3, 4, 5 ở trên là **khiếm khuyết thật của mô hình**, không phải lựa
+chọn thiết kế. Chúng đều đẩy sai lệch về cùng một hướng ở phần đuôi phân phối:
+
+| Vấn đề | Ảnh hưởng | Ai bị sai nhiều nhất |
+|---|---|---|
+| Binomial độc lập, không bảo toàn tổng bàn | đuôi phải quá dày | đội có nhiều cầu thủ share cao |
+| Share của người vắng mặt bị vứt | đuôi phải quá mỏng | cầu thủ dự bị, người thay thế |
+| Kiến tạo độc lập với bàn thắng | tự kiến tạo cho bàn của mình | cầu thủ vừa dứt điểm vừa kiến tạo nhiều |
+| Penalty không tách | thiếu đuôi phải | người đá 11m |
+
+Cách sửa đúng là chuyển sang phân bổ **Multinomial** trên đúng `team_goals`, với
+vector share **chuẩn hoá lại theo những người thực sự ra sân** trong mỗi vòng lặp,
+rồi rút kiến tạo **có điều kiện trên các bàn đã gán cho người khác**, và tách một
+phép rút riêng cho phạt đền. Đây là thay đổi làm dịch chuyển mọi con số xP nên
+chưa thực hiện.
 
 ## 4. Rủi ro (3 chỉ số)
 

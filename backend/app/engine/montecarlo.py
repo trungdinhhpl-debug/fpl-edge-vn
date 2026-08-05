@@ -81,10 +81,14 @@ def simulate_fixture(
         if p.element_type in RULES.conceded_penalty_positions:
             pts += np.where(started, conceded_penalty, 0)
 
-        # saves (GK)
+        # saves (GK). The 0.3 factor is for a keeper who came ON, so it must not
+        # apply to one who never left the bench: `np.where(started, 1, 0.3)` gave
+        # a permanent reserve 0.064 points a match from saves he could not have
+        # made — small, but it quietly flattered every cheap bench goalkeeper.
         if p.element_type == 1 and p.saves90 > 0:
-            saves = rng.poisson(p.saves90 * np.where(started, 1.0, 0.3), n)
-            pts += np.floor(saves / RULES.saves_per_point)
+            rate = np.where(started, 1.0, np.where(subbed, 0.3, 0.0))
+            saves = rng.poisson(p.saves90 * rate, n)
+            pts += np.where(played, np.floor(saves / RULES.saves_per_point), 0.0)
 
         # defensive contribution
         if p.element_type in RULES.defcon_positions and p.dc_hit_prob > 0:

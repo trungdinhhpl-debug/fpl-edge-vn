@@ -118,10 +118,49 @@ export default function MethodologyPage() {
         ) : null}
 
         <Card>
-          <CardHeader><CardTitle>Monte Carlo & rủi ro</CardTitle></CardHeader>
+          <CardHeader><CardTitle>Monte Carlo — phân bổ bàn thắng</CardTitle></CardHeader>
           <CardContent className="space-y-2 text-sm text-muted-foreground">
-            <p>Mô phỏng ở cấp <b>trận đấu của đội</b> để giữ tương quan: sạch lưới dùng chung cho GK + hậu vệ; bàn thắng của cầu thủ rút từ tổng bàn của đội (không giả định độc lập).</p>
-            <p>Xuất: trung vị, P25/P75/P90, ceiling (P95), P(blank), P(≥5), P(≥10), phương sai.</p>
+            <p>Mô phỏng ở cấp <b>trận đấu của đội</b>: mỗi vòng lặp rút một lần tổng bàn thắng và tổng bàn thua, rồi mới chia cho cầu thủ — sạch lưới dùng chung cho GK + hậu vệ, bàn thắng rút từ chính tổng bàn đó.</p>
+            <code className="block rounded bg-muted p-2 text-xs text-foreground">
+              share_goal = xG cầu thủ / Σ xG đội · share_assist = xA cầu thủ / Σ xG đội
+            </code>
+            <p>
+              <b>Là xG share, không phải npxG hay shot share</b> — FPL không tách npxG nên
+              phần xG từ chấm 11m nằm luôn trong share.
+            </p>
+            <details className="rounded-md border p-2">
+              <summary className="cursor-pointer text-xs font-medium text-foreground">
+                Giới hạn đã biết của phần phân bổ (5 điểm)
+              </summary>
+              <ul className="mt-2 space-y-1.5 text-xs">
+                <li>
+                  <b>Penalty không tách riêng trong mô phỏng.</b> Không có phép rút riêng cho
+                  quả 11m, nên upside của người đá phạt đền bị hoà vào share bóng sống →
+                  thiếu đuôi phải.
+                </li>
+                <li>
+                  <b>Bàn chia ra không bảo toàn theo tổng của đội.</b> Khi đã biết tổng bàn,
+                  phần chia cho từng người là các Binomial độc lập chứ không phải Multinomial:
+                  đo được <b>20,9%</b> số trận chia ra nhiều bàn hơn số đội thực ghi. Kỳ vọng
+                  trung bình vẫn đúng, sai lệch nằm ở hình dạng đuôi.
+                </li>
+                <li>
+                  <b>Share của cầu thủ không ra sân bị vứt, không chuyển cho ai.</b> Điểm
+                  trung bình của đồng đội y hệt nhau dù trụ cột có P(start) 95% hay 10% → cầu
+                  thủ dự bị/người thay thế bị đánh giá thấp một cách hệ thống.
+                </li>
+                <li>
+                  <b>Kiến tạo rút độc lập với bàn thắng</b>, nên một người có thể được tính
+                  kiến tạo cho chính bàn mình ghi (<b>26%</b> số trận trong phép đo).
+                </li>
+                <li>
+                  <b>Double Gameweek:</b> hai trận rút độc lập (tương quan +0,0003) → có mô
+                  phỏng biến động xoay tua, nhưng <b>không</b> biểu diễn &ldquo;nghỉ trận 1
+                  nên dễ đá trận 2&rdquo; và không có yếu tố mệt mỏi.
+                </li>
+              </ul>
+            </details>
+            <p>Xuất: trung vị, P25/P75/P90, ceiling (P95), P(blank), P(≥5), P(≥10), P(≥15), phương sai.</p>
             <p>3 chỉ số rủi ro riêng: Minutes / Performance / Structural.</p>
           </CardContent>
         </Card>
