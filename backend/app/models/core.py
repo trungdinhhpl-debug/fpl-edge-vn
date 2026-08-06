@@ -44,6 +44,44 @@ class Season(Base):
     )
 
 
+class SeasonRules(Base):
+    """Phiên bản từng NHÓM luật của một mùa, kèm mốc hiệu lực.
+
+    `seasons.rules_version` là một vân tay duy nhất của cả `game_config`, nên nó
+    đổi khi FPL sửa bất cứ thứ gì và không cho biết NHÓM luật nào đã đổi. Bảng
+    này tách ra để engine (và người đọc báo cáo) biết đang áp bộ luật nào:
+
+      * `scoring_rules_version` — vân tay `game_config` (có trong API)
+      * `bps_rules_version`     — bộ trọng số BPS, KHÔNG có trong API nên phải
+                                  đánh phiên bản trong `app/bps_rules.py`
+      * `assist_rules_version`  — định nghĩa kiến tạo
+      * `chip_rules_version`    — số chip & khoảng gameweek được dùng
+
+    Một mùa có thể có nhiều dòng nếu FPL sửa luật giữa mùa; dòng đang hiệu lực là
+    dòng có `effective_from` lớn nhất mà không vượt hiện tại.
+    """
+    __tablename__ = "season_rules"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    season_id: Mapped[int] = mapped_column(ForeignKey("seasons.id"), index=True)
+    scoring_rules_version: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    bps_rules_version: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    assist_rules_version: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    chip_rules_version: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    effective_from: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    source_url: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "season_id", "effective_from", name="uq_season_rules_effective"
+        ),
+    )
+
+
 class Gameweek(Base):
     __tablename__ = "gameweeks"
     id: Mapped[int] = mapped_column(primary_key=True)  # FPL event id (1..38)

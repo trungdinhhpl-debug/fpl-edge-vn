@@ -83,12 +83,98 @@ appearance  = P(≥60')·2 + (P(appear) − P(≥60'))·1
 clean_sheet = e^(−λ_conceded) · P(≥60') · cs_pts[pos]
 conceded    = (λ_conceded / 2) · (−1) · P(≥60')          # GK/DEF
 saves_EV    = (saves90 · xMins/90 · shot_adj) / 3         # GK
-defcon_EV   = 2 · P(actions ≥ ngưỡng)                     # Poisson, luật 2025/26
-bonus_EV    = 0.35·involvement + 0.0016·bps90·(xMins/90)  # ≤ 3
+defcon_EV   = 2 · P(actions ≥ ngưỡng)                     # Poisson
+bonus_EV    = chia quỹ 6 điểm trong nội bộ trận            # xem 2c
 ```
 
-**Luật tính điểm** đọc từ `app/scoring.py` (mùa hiện tại 2025/26, gồm
-Defensive Contribution) — không hard-code luật mùa cũ.
+**Luật tính điểm** đọc từ `app/scoring.py`, nạp nguyên văn từ
+`bootstrap-static.game_config` của mùa đang chạy (gồm Defensive Contribution) —
+không hard-code tên mùa hay điểm từng hạng mục.
+
+**Trọng số BPS thì KHÔNG có trong API** (`game_config.scoring.bps` chỉ là "1 BPS
+đổi ra bao nhiêu điểm" = 0), nên chúng nằm trong `app/bps_rules.py` và được đánh
+phiên bản theo mùa; phiên bản đang áp được ghi vào bảng `season_rules`
+(`bps_rules_version`) cạnh `scoring_rules_version`, `assist_rules_version`,
+`chip_rules_version` và mốc `effective_from`.
+
+Điều đó quan trọng vì `bps90` ở công thức trên tính từ tổng BPS **cả mùa** mà FPL
+phát ra, và **trước vòng 1 thì tổng đó vẫn là của mùa trước** (kiểm chứng
+2026-08-05: Haaland 2953 phút / 239 điểm trong khi hạn vòng 1 là 2026-08-21).
+Luật BPS 2026/27 đã đổi, nên số cũ được kiếm theo một thước đo khác:
+
+| Hạng mục | 2025/26 | 2026/27 |
+|---|---|---|
+| Clearances / blocks / interceptions | 1 BPS mỗi 2 | 1 BPS mỗi **3** |
+| Bị đối phương qua người | −1 BPS | **bỏ hạng mục** |
+| Cứu thua trong vòng cấm | 3 BPS | 3 BPS |
+| Cứu thua ngoài vòng cấm | 2 BPS | gộp vào "cứu thua khác" = 2 BPS |
+| Cứu thua từ big chance | — | **+1 BPS** |
+| Cứu penalty | 8 BPS | 7 BPS (+1 big chance = 8) |
+
+`app/bps_rules.equivalent_bps()` quy tổng cũ về tương đương luật hiện hành trước
+khi vào mô hình bonus. Chỉ thành phần CBI quy đổi được bằng số học từ dữ liệu FPL
+công bố (`ΔBPS = CBI·(1/3 − 1/2) = −CBI/6`); hai thay đổi còn lại **không có dữ
+liệu để định lượng** (FPL không phát số lần cầu thủ bị qua người, cũng không phát
+số big chance thủ môn đã cứu) nên hệ số của chúng để **0** kèm núm điều chỉnh,
+chứ không bịa số. Nghĩa là phần bù cho thủ môn và cầu thủ hay rê dắt hiện **chưa
+được mô hình hoá** — chỉ phần trung vệ bị hạ là đã sửa.
+
+Không quy đổi khi vòng 1 đã có trận kết thúc: từ lúc đó tổng cả-mùa là số của mùa
+này, kiếm theo đúng luật đang áp (`services/season_state.stats_season()`).
+
+### 2c. Bonus — chia một quỹ cố định, không phải công thức rời (`engine/bonus.py`)
+
+Bonus là chỗ duy nhất trong engine có **luật bảo toàn kiểm tra được**: mỗi trận FPL
+phát đúng **6 điểm** (3 + 2 + 1) cho ba người có BPS cao nhất, ai đứng thứ tư được
+0 dù BPS bao nhiêu. Bản trước tính bonus như thuộc tính riêng của từng cầu thủ
+(`0.35·involvement + 0.0016·bps90·xMins/90`) nên không có gì buộc nó tôn trọng luật
+đó, và nó trôi rất xa:
+
+| | thực tế 2025/26 (/90) | mô hình cũ | mô hình mới |
+|---|---|---|---|
+| Thủ môn | 0.223 | 33% | **103%** |
+| Hậu vệ | 0.264 | 40% | **68%** |
+| Tiền vệ | 0.360 | 46% | **82%** |
+| Tiền đạo | 0.632 | 38% | **85%** |
+| Tổng mỗi trận | 6.00 | **2.47** | **6.00** |
+
+Mô hình mới:
+
+```
+BPS kỳ vọng_i = bps90_i · (xMins/90)                       # mức nền của chính cầu thủ
+              + goal_bps[pos]·xG_trận + 9·xA_trận          # phần lệch riêng của trận
+              + 12·P(sạch lưới)·P(≥60')                    # GK/DEF
+trọng số_i    = (BPS kỳ vọng_i) ^ 1.99
+bonus_i       = 6 · trọng số_i / Σ trọng số (CẢ HAI ĐỘI)
+```
+
+Ba điều đáng nói:
+
+- **Số mũ 1.99 đo từ dữ liệu**, không chọn tay: hồi quy log-log bonus/90 theo
+  BPS/90 trên 252 cầu thủ đá từ 900 phút mùa 2025/26 (R² = 0.45 trên thang gốc).
+  Số mũ lớn hơn 1 chính là dấu vết cơ chế top-3 — BPS gấp đôi cho bonus gấp khoảng
+  bốn lần. Dạng tuyến tính cho R² 0.47, nhích hơn, nhưng hệ số chặn âm (−0.37) nên
+  nó dự báo bonus âm cho người BPS thấp.
+- **BPS bàn thắng NGƯỢC thang điểm FPL**: tiền đạo 24, tiền vệ 18, hậu vệ/thủ môn
+  12 (điểm FPL thì thủ môn 10, tiền đạo 4 — bù cho việc hậu vệ ghi bàn hiếm). Ghi
+  ngược cặp này làm tiền đạo bị chia hụt đúng một nửa; đã đo được và đã có test khoá.
+- **Phải biết cả 22 người mới tính được.** `expected_points()` một mình không tính
+  nổi bonus, nên nó nhận `bonus_override` từ `engine/projections.py` — nơi có cả hai
+  đội của trận. Gọi lẻ (test, thăm dò) thì rơi về dạng rời rạc đã khớp trực tiếp
+  với dữ liệu; dạng đó đúng ở mức trung bình dân số nhưng **không** bảo toàn quỹ.
+
+**Còn hụt bao nhiêu, và vì sao không tinh chỉnh thêm.** Hậu vệ ở 68% là con số thấp
+nhất còn lại. Một phần là đúng: mùa 2026/27 hạ BPS từ CBI nên hậu vệ thật sự kiếm ít
+BPS hơn — đo được −6.7%, với số mũ 2 thì tương đương −13% bonus, tức mức "đúng" nên
+vào khoảng 87%. Phần còn lại (~19%) chưa giải thích được. Chúng tôi **không** nhân
+thêm hệ số theo vị trí để kéo về 100%, vì mốc so sánh có hai khuyết điểm: nó tính
+theo luật BPS **mùa cũ**, và nó được chia theo số phút **cuối mùa** — thông tin mà
+ở vòng 1 không ai có. Khớp cho vừa một mốc như vậy là làm đẹp số, không phải hiệu
+chuẩn.
+
+Tác động lên xP: cầu thủ dự kiến đá chính (xMins ≥ 60) tăng trung bình **+0.213**
+điểm mỗi vòng — thủ môn +0.196, hậu vệ +0.139, tiền vệ +0.233, **tiền đạo +0.591**.
+Thứ tự gần như không đổi: top-20 theo tổng xP 8 vòng giữ lại 19/20 người.
 
 `λ_team_goals` và `λ_conceded` từ mô hình sức mạnh đội (`team_strength.py`):
 kết hợp strength ratings của FPL với xG/xGA thực nghiệm, blend theo số trận đã đá
@@ -135,9 +221,33 @@ Vài điểm cần biết:
   ổn định: lệch 1 điểm % ở giá hòa chỉ làm tổng bàn đổi ~0.18. Bản cũ ghim tổng
   bàn về mức trung bình giải mỗi khi thiếu kèo tài/xỉu — như vậy là vứt đi thông
   tin thật.
-- Mỗi mức kèo là **một quan sát riêng**; giá được trung bình theo từng mức chứ
-  không trộn giữa các mức khác nhau. Mức nào quá ít nhà cái treo so với mức chính
-  thì loại.
+- **Khử vig theo TỪNG nhà cái trước, rồi mới tổng hợp.** Xác suất ẩn được chuẩn
+  hoá trong nội bộ các kết cục của chính nhà cái đó, nên biên lợi nhuận của một
+  nhà cái không lẫn sang giá của nhà cái khác.
+- **Tổng hợp bằng trung vị, không phải trung bình.** Trung bình cho mỗi nhà cái
+  quyền dịch đồng thuận 1/n, nên một nhà cái treo giá cũ hoặc lệch là đủ kéo cả
+  đồng thuận; trung vị bỏ qua nó. Đo được: 12 nhà cái quanh Over 2.5 = 0.52, thêm
+  một nhà cái ở 0.20 thì trung bình xuống 0.4954 (lệch 0.0246) còn trung vị đứng
+  nguyên 0.5200 — chênh **0.097 bàn** ở tổng bàn kỳ vọng. Với 1X2, trung vị lấy
+  theo từng kết cục rồi **chuẩn hoá lại**, vì ba trung vị độc lập không tự cộng
+  thành 1.
+- Mỗi mức kèo là **một quan sát riêng**; giá lấy trung vị theo từng mức chứ không
+  trộn giữa các mức khác nhau. Mức nào quá ít nhà cái treo so với mức chính thì
+  loại.
+- **Trọng số thị trường hạ khi thị trường mỏng.** Trọng số blend
+  (`odds_market_weight`, mặc định 0.7) được nhân với `min(1, số_nhà_cái / 8)` cho
+  từng trận, nên đồng thuận 20 nhà cái và giá lẻ của 2 nhà cái không còn được coi
+  là cùng một loại bằng chứng. Dữ liệu hiện tại có 19–20 nhà cái mỗi trận nên
+  **λ không đổi một chút nào** (đo được: chênh lệch lớn nhất 0.000000); giả lập
+  3 nhà cái thì λ dịch tới **0.19 bàn** về phía mô hình nội bộ. Không có số nhà
+  cái (dữ liệu ghi trước khi có cột này) thì giữ trọng số đầy đủ — hạ trọng số vì
+  *thiếu thông tin* sẽ âm thầm làm yếu những trận vốn có giá tốt.
+- **KHÔNG có** trọng số nhà cái theo thanh khoản hay độ chính xác lịch sử. The
+  Odds API không công bố doanh số cũng không công bố kết quả đã quyết toán, nên
+  một trọng số như vậy sẽ là số do ta tự bịa. Trung vị đồng trọng số là đồng thuận
+  mạnh nhất mà dữ liệu đang có cho phép. Muốn làm thật thì phải lưu closing line
+  + kết quả trận theo từng nhà cái rồi tính điểm hiệu chuẩn — giống bảng
+  `expert_track_record` đang làm cho các nguồn chuyên gia.
 - Sai số khớp cuối cùng được ghi vào log đồng bộ. Sai số lớn nghĩa là ba thị
   trường mâu thuẫn nhau nhiều hơn mức một mô hình tỷ số có thể dung hòa.
 

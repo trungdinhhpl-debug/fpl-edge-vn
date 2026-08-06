@@ -66,6 +66,9 @@ def model_health(db: Session = Depends(get_db)) -> dict:
             "fixtures_covered": n_odds,
             "gameweeks": odds_gws,
             "market_weight": settings.odds_market_weight,
+            # trọng số trên bị hạ theo tỷ lệ khi trận có ít nhà cái ra giá hơn mức này
+            "full_support_books": settings.odds_full_support_books,
+            "consensus": "median per outcome/line, de-vigged per bookmaker",
             "last_fetched": odds_at.isoformat() if odds_at else None,
             "inversion": {
                 "method": "joint least-squares, Dixon–Coles score matrix",
@@ -112,6 +115,21 @@ def meta_version(db: Session = Depends(get_db)) -> dict:
     # vẫn báo đúng luật hiện hành sau khi FPL đổi luật giữa mùa
     scoring.load_rules(db)
     season = db.scalar(select(Season).where(Season.is_current.is_(True)))
+
+    # Số lần luật đã đổi trong mùa này -> phần sau của nhãn 'v2026.N'.
+    # Đếm dòng thật trong season_rules, không phải một con số tự đặt trong code.
+    from app.models import SeasonRules
+
+    revision = 1
+    if season is not None:
+        revision = max(
+            1,
+            db.scalar(
+                select(func.count()).select_from(SeasonRules).where(
+                    SeasonRules.season_id == season.id
+                )
+            ) or 1,
+        )
     last_data = db.scalar(
         select(func.max(SourceFetchLog.fetched_at)).where(
             SourceFetchLog.source_name.like("FPL%")
@@ -148,11 +166,20 @@ def meta_version(db: Session = Depends(get_db)) -> dict:
         # a pre-season projection and a December one must not look alike.
         "season_state": season_state(db),
         "rules_version": scoring.RULES_VERSION,
+        # nhãn dễ đọc cho giao diện; băm ở trên vẫn là danh tính chính xác
+        "rules_label": scoring.rules_label(revision),
+        "rules_revision": revision,
         "rules_updated_at": (
             season.rules_updated_at.isoformat()
             if season and season.rules_updated_at else None
         ),
         "rules_source": scoring.RULES.source,
+        # BPS tách riêng: FPL không phát trọng số BPS qua API nên phiên bản này do
+        # app/bps_rules.py khai, và ngày dưới đây là ngày FPL CÔNG BỐ luật.
+        "bps_rules_version": scoring.BPS_RULES.version,
+        "bps_rules_effective_from": scoring.BPS_RULES.effective_from,
+        "bps_rules_source_url": scoring.BPS_RULES.source_url,
+        "bps_rules_known": scoring.BPS_RULES_KNOWN,
         "projection_version": settings.model_version,
         "last_data_update": last_data.isoformat() if last_data else None,
         "last_model_run": last_model.isoformat() if last_model else None,

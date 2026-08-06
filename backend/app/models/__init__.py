@@ -6,6 +6,7 @@ from app.models.core import (  # noqa: F401
     PlayerGameweekStat,
     PlayerPrice,
     Season,
+    SeasonRules,
     Team,
 )
 from app.models.meta import (  # noqa: F401
@@ -28,6 +29,7 @@ from app.models.projections import (  # noqa: F401
 
 __all__ = [
     "Season",
+    "SeasonRules",
     "Gameweek",
     "Team",
     "Player",

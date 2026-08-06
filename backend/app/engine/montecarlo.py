@@ -185,15 +185,24 @@ def simulate_fixture(
             hit = rng.random(n) < p.dc_hit_prob
             pts += np.where(started & hit, RULES.defcon_points, 0.0)
 
-        # bonus — more likely when the player returned
+        # bonus — 1..3 điểm khi có mặt trong top 3 BPS của trận.
+        #
+        # Tần suất được khoá vào KỲ VỌNG GIẢI TÍCH (`bonus_base`, do
+        # engine/bonus.allocate chia trong nội bộ trận). Khi mask nổ, số điểm rút
+        # trong {1,2,3} nên trung bình là 2 — vậy để trung bình mô phỏng khớp kỳ
+        # vọng, xác suất mask phải là `bonus_base / 2`.
+        #
+        # Bản trước dùng `min(1.0, 0.4 + bonus_base)` với `bonus_base` bị cắt ở
+        # 0.6: mọi cầu thủ có kỳ vọng bonus từ 0.6 trở lên đều bão hoà ở xác suất
+        # 1.0, tức là *luôn* được bonus. Với mô hình bonus mới (cầu thủ đầu bảng
+        # ~1.8 điểm) thì phần lớn nhóm đầu rơi vào chỗ bão hoà đó.
         returned = (g + a) > 0
         bonus = np.where(
             returned,
             rng.integers(1, 4, n),  # 1..3 when involved
             np.where(started & clean_sheet & (p.element_type <= 2), 1, 0),
         )
-        # scale bonus frequency by the player's bonus propensity
-        bonus_mask = rng.random(n) < min(1.0, 0.4 + p.bonus_base)
+        bonus_mask = rng.random(n) < min(1.0, max(0.0, p.bonus_base) / 2.0)
         pts += np.where(bonus_mask, bonus, 0)
 
         # yellow cards

@@ -18,18 +18,44 @@ export function VersionBar({ compact = false }: { compact?: boolean }) {
         })
       : "—";
 
+  const vnDate = (iso?: string | null) =>
+    iso
+      ? new Date(iso).toLocaleDateString("vi-VN", {
+          timeZone: "Asia/Ho_Chi_Minh",
+          day: "2-digit",
+          month: "2-digit",
+          year: "numeric",
+        })
+      : null;
+
+  const bpsDate = vnDate(data.bps_rules_effective_from);
+
   const items: { label: string; value: string; title?: string }[] = [
     { label: "Mùa giải", value: data.season ?? "—", title: `Nguồn: ${data.season_source}` },
     {
-      label: "Phiên bản luật",
-      value: data.rules_version ?? "—",
+      label: "Luật tính điểm",
+      // nhãn dễ đọc; băm chính xác của game_config nằm trong tooltip
+      value: data.rules_label ?? data.rules_version ?? "—",
       title:
-        (data.rules_updated_at ? `Luật cập nhật ${vnTime(data.rules_updated_at)} · ` : "") +
+        `Vân tay game_config: ${data.rules_version ?? "—"} · ` +
+        (data.rules_updated_at ? `đồng bộ ${vnTime(data.rules_updated_at)} · ` : "") +
         `Nguồn: ${data.rules_source}`,
     },
-    { label: "Phiên bản mô hình", value: data.projection_version ?? "—" },
     {
-      label: "Dữ liệu cập nhật",
+      // BPS tách riêng vì FPL không phát trọng số BPS qua API — phiên bản do
+      // chúng ta khai, nên phải nói rõ nó có từ bao giờ.
+      label: "BPS",
+      value: bpsDate
+        ? `cập nhật ${bpsDate}`
+        : `${data.bps_rules_version ?? "—"} (chưa rõ ngày công bố)`,
+      title:
+        `Phiên bản ${data.bps_rules_version ?? "—"} · ` +
+        `Trọng số BPS không có trong FPL API nên được khai trong app/bps_rules.py · ` +
+        `Nguồn: ${data.bps_rules_source_url ?? "—"}`,
+    },
+    { label: "Model", value: data.projection_version ?? "—" },
+    {
+      label: "Dữ liệu chạy lần cuối",
       value: timeAgo(data.last_data_update, lang),
       title: vnTime(data.last_data_update),
     },
@@ -59,6 +85,11 @@ export function VersionBar({ compact = false }: { compact?: boolean }) {
       {data.rules_source?.includes("fallback") && (
         <span className="rounded bg-caution/15 px-1.5 py-0.5 font-medium text-caution">
           luật dự phòng — chưa đồng bộ được từ FPL
+        </span>
+      )}
+      {data.bps_rules_known === false && (
+        <span className="rounded bg-caution/15 px-1.5 py-0.5 font-medium text-caution">
+          chưa khai luật BPS cho mùa này — đang dùng bộ của mùa gần nhất
         </span>
       )}
       {stale && (

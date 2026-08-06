@@ -477,3 +477,77 @@ def test_players_with_history_unaffected_by_role_prior():
         season_minutes=3200, team_matches_played=0, role_rank=8,   # rank thấp
     )
     assert nailed.p_start > 0.85    # dữ liệu thật thắng, không bị kéo về 0.12
+
+
+# ------------------------------------------- đồng thuận nhà cái & độ mỏng ----
+def test_median_consensus_ignores_a_single_mispriced_book():
+    """Một nhà cái treo giá lệch không được kéo đồng thuận.
+
+    Trung bình cho mỗi nhà cái quyền dịch đồng thuận 1/n; trung vị thì không,
+    trừ khi giá lệch nằm gần giữa.
+    """
+    from app.providers.probability import _consensus_lines, _median
+
+    prices = [0.52, 0.51, 0.53, 0.52, 0.52, 0.51, 0.53, 0.52, 0.51, 0.52, 0.53, 0.52]
+    quotes = [(2.5, p) for p in prices]
+    clean = _consensus_lines(quotes)
+    dirty = _consensus_lines(quotes + [(2.5, 0.20)])   # một nhà cái stale
+
+    assert clean[0][1] == pytest.approx(0.52, abs=1e-9)
+    # trung vị gần như không nhúc nhích; trung bình sẽ lệch ~0.025
+    assert dirty[0][1] == pytest.approx(0.52, abs=1e-9)
+    assert abs(dirty[0][1] - sum(prices + [0.20]) / 13) > 0.02
+
+    # trung vị số lẻ và số chẵn phần tử
+    assert _median([1.0, 3.0, 2.0]) == 2.0
+    assert _median([1.0, 2.0, 3.0, 4.0]) == 2.5
+    assert _median([]) == 0.0
+
+
+def test_1x2_medians_are_renormalised_to_a_valid_distribution():
+    """Ba trung vị độc lập không tự cộng thành 1 — phải chuẩn hoá lại."""
+    from app.providers.probability import _median
+
+    # mỗi nhà cái tự cộng thành 1, nhưng nhà cái nằm giữa KHÁC nhau ở từng kết cục
+    books = [(0.50, 0.25, 0.25), (0.40, 0.35, 0.25), (0.44, 0.26, 0.30)]
+    for b in books:
+        assert sum(b) == pytest.approx(1.0, abs=1e-9)
+    m = [
+        _median([b[0] for b in books]),
+        _median([b[1] for b in books]),
+        _median([b[2] for b in books]),
+    ]
+    assert sum(m) != pytest.approx(1.0, abs=1e-9)      # đúng là lệch
+    tot = sum(m)
+    normalised = [x / tot for x in m]
+    assert sum(normalised) == pytest.approx(1.0, abs=1e-12)
+
+
+def test_market_weight_falls_when_few_books_priced_the_fixture():
+    from app.engine.team_strength import TeamStrength
+
+    teams = [type("T", (), {"id": i, "short_name": f"T{i}", "code": i,
+                            "strength": 1100, "strength_overall_home": 1100,
+                            "strength_overall_away": 1100, "strength_attack_home": 1100,
+                            "strength_attack_away": 1100, "strength_defence_home": 1100,
+                            "strength_defence_away": 1100})() for i in (1, 2)]
+    market = {(1, 2): (3.0, 0.4)}          # thị trường nói đội nhà rất mạnh
+
+    full = TeamStrength(teams, [], [], market=market, market_weight=0.7,
+                        market_support={(1, 2): 20}, full_support_books=8)
+    thin = TeamStrength(teams, [], [], market=market, market_weight=0.7,
+                        market_support={(1, 2): 2}, full_support_books=8)
+    unknown = TeamStrength(teams, [], [], market=market, market_weight=0.7,
+                           market_support={}, full_support_books=8)
+
+    lam_full = full.expected_goals(1, 2, True)[0]
+    lam_thin = thin.expected_goals(1, 2, True)[0]
+    lam_unknown = unknown.expected_goals(1, 2, True)[0]
+
+    # 20 nhà cái: đủ hỗ trợ nên không bị hạ — giống hệt khi không khai số nhà cái
+    assert lam_full == pytest.approx(lam_unknown, abs=1e-9)
+    # 2 nhà cái: nghiêng về mô hình nội bộ nên xa mức thị trường 3.0 hơn
+    assert lam_thin < lam_full
+    # nhưng vẫn phải nhúc nhích theo thị trường, không bị bỏ hẳn
+    no_market = TeamStrength(teams, [], [], market={}, market_weight=0.7)
+    assert lam_thin > no_market.expected_goals(1, 2, True)[0]

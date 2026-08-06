@@ -12,6 +12,9 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 
+from app import bps_rules as bps_mod
+from app import scoring as scoring_mod
+from app.engine import bonus as bonus_mod
 from app.scoring import RULES
 
 # per-90 position priors (league-ish) used for shrinkage of small samples
@@ -70,6 +73,13 @@ def expected_points(
     yellow_season: int,
     red_season: int,
     bps_season: int,
+    cbi_season: float = 0.0,
+    # Mùa mà các tổng cả-mùa ở trên thực sự thuộc về. Trước vòng 1, FPL vẫn phát
+    # tổng của mùa trước, nên nó KHÁC mùa đang chơi và BPS phải được quy đổi.
+    # None = coi như cùng mùa với luật đang áp (không quy đổi).
+    stats_season: str | None = None,
+    # Suất bonus đã chia trong nội bộ trận đấu. None = không có ngữ cảnh cả trận.
+    bonus_override: float | None = None,
     penalties_order: int | None,
     # from xMins model
     xmins: float,
@@ -146,13 +156,31 @@ def expected_points(
         p_hit = _poisson_ge_k(exp_actions, threshold)
         defcon_ev = rules.defcon_points * p_hit
 
-    # bonus — from BPS/90 blended with attacking/CS involvement
-    bps90 = bps_season / mins90
-    involvement = exp_goals + 0.7 * exp_assists + 0.5 * cs_prob * p_60_plus
-    bonus_ev = min(
-        rules.max_bonus,
-        0.35 * involvement + 0.0016 * bps90 * minutes_frac,
+    # bonus — from BPS/90 blended with attacking/CS involvement.
+    # BPS mang từ mùa trước sang được quy về luật đang áp trước khi dùng: mùa
+    # 2026/27 hạ BPS từ CBI (1 điểm/2 -> 1 điểm/3) nên tổng BPS cũ của trung vệ
+    # phóng đại tiềm năng bonus của họ. Xem app/bps_rules.py.
+    active_bps = scoring_mod.BPS_RULES
+    bps_effective = bps_mod.equivalent_bps(
+        bps=bps_season,
+        cbi=cbi_season,
+        saves=saves_season,
+        minutes=minutes_season,
+        from_rules=bps_mod.for_season(stats_season) if stats_season else active_bps,
+        to_rules=active_bps,
     )
+    bps90 = bps_effective / mins90
+
+    # Bonus là quỹ CỐ ĐỊNH 6 điểm mỗi trận chia cho 3 người có BPS cao nhất, nên
+    # nó không tính được từ một cầu thủ đứng riêng. `bonus_override` là suất đã
+    # chia trong nội bộ trận (do engine/bonus.allocate tính, gọi từ projections);
+    # thiếu nó thì dùng dạng rời rạc đã khớp dữ liệu, kém hơn nhưng vẫn hiệu chuẩn.
+    if bonus_override is not None:
+        bonus_ev = min(rules.max_bonus, max(0.0, bonus_override))
+    else:
+        bonus_ev = bonus_mod.standalone_bonus(
+            bps90=bps90, minutes_frac=minutes_frac, max_bonus=rules.max_bonus,
+        )
 
     # cards
     card_ev = yc90 * minutes_frac * rules.yellow_card_points + rc90 * minutes_frac * rules.red_card_points
@@ -191,5 +219,13 @@ def expected_points(
             "minutes_frac": round(minutes_frac, 3),
             "lam_team_goals": round(lam_team_goals, 3),
             "lam_conceded": round(lam_conceded, 3),
+            # Nguyên liệu để chia quỹ bonus trong nội bộ trận đấu. Được trả ra đây
+            # thay vì tính lại ở projections.py: hai bản sao của cùng phép tính là
+            # hai chỗ có thể lệch nhau về sau.
+            "bps90": round(bps90, 3),
+            "exp_goals": round(exp_goals, 4),
+            "exp_assists": round(exp_assists, 4),
+            "cs_prob": round(cs_prob, 4),
+            "p_60_plus": round(p_60_plus, 4),
         },
     )

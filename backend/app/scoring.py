@@ -19,6 +19,8 @@ import hashlib
 import json
 from dataclasses import dataclass, field
 
+from app import bps_rules as _bps
+
 SCORING_SOURCE = "FPL bootstrap-static.game_config"
 SCORING_HELP_URL = "https://fantasy.premierleague.com/help/rules"
 
@@ -106,6 +108,39 @@ GAME = GameRules()
 SEASON: str = "—"
 RULES_VERSION: str = "fallback"
 
+# Trọng số BPS của mùa hiện hành. Không nằm trong game_config nên phải tra theo
+# tên mùa trong app/bps_rules.py — đọc qua `app.scoring.BPS_RULES` (import
+# module, đừng `from ... import BPS_RULES`) để luôn thấy giá trị mới nhất.
+BPS_RULES: _bps.BPSRules = _bps.LATEST
+BPS_RULES_KNOWN: bool = False
+
+
+def rules_versions() -> dict[str, str]:
+    """Phiên bản từng nhóm luật đang áp — khớp các cột của bảng `season_rules`."""
+    return {
+        "season": SEASON,
+        "scoring_rules_version": RULES_VERSION,
+        "bps_rules_version": BPS_RULES.version,
+        # kiến tạo & chip chưa đổi kể từ 2025/26; giữ nguyên phiên bản của mùa đó
+        "assist_rules_version": "2025.1",
+        "chip_rules_version": "2025.1",
+        "source_url": BPS_RULES.source_url,
+    }
+
+
+def rules_label(revision: int = 1) -> str:
+    """Nhãn luật dễ đọc cho giao diện, vd 'v2026.1'.
+
+    `RULES_VERSION` là băm của `game_config` — chính xác nhưng vô nghĩa với người
+    đọc ('a3c299d7cf'). Nhãn này ghép năm bắt đầu mùa với số lần luật đã đổi
+    TRONG mùa đó (đếm từ bảng `season_rules`), nên nó vẫn là số liệu thật chứ
+    không phải phiên bản tự đặt: FPL sửa luật giữa mùa thì thành v2026.2.
+    """
+    head = SEASON.split("/")[0] if SEASON and "/" in SEASON else None
+    if not head or not head.isdigit():
+        return f"v?.{max(1, revision)}"
+    return f"v{head}.{max(1, revision)}"
+
 
 # --------------------------------------------------------------- phân tích ----
 def season_from_config(game_config: dict) -> str | None:
@@ -175,7 +210,7 @@ def game_from_config(game_config: dict) -> GameRules:
 def apply_config(game_config: dict, season: str | None = None) -> dict:
     """Nạp luật vào hai singleton. Cập nhật TẠI CHỖ để mọi module đang giữ tham
     chiếu (`from app.scoring import RULES`) tự động dùng luật mới."""
-    global SEASON, RULES_VERSION
+    global SEASON, RULES_VERSION, BPS_RULES, BPS_RULES_KNOWN
 
     new_scoring = scoring_from_config(game_config)
     new_game = game_from_config(game_config)
@@ -186,7 +221,15 @@ def apply_config(game_config: dict, season: str | None = None) -> dict:
 
     SEASON = season or season_from_config(game_config) or SEASON
     RULES_VERSION = rules_hash(game_config)
-    return {"season": SEASON, "rules_version": RULES_VERSION, "source": RULES.source}
+    BPS_RULES = _bps.for_season(SEASON)
+    BPS_RULES_KNOWN = _bps.is_known(SEASON)
+    return {
+        "season": SEASON,
+        "rules_version": RULES_VERSION,
+        "source": RULES.source,
+        "bps_rules_version": BPS_RULES.version,
+        "bps_rules_known": BPS_RULES_KNOWN,
+    }
 
 
 def load_rules(db) -> dict:
@@ -197,11 +240,11 @@ def load_rules(db) -> dict:
 
     row = db.scalar(select(Season).where(Season.is_current.is_(True)))
     if not row or not row.rules_json:
-        return {"season": SEASON, "rules_version": RULES_VERSION, "source": RULES.source}
+        return {**rules_versions(), "source": RULES.source}
     try:
         return apply_config(json.loads(row.rules_json), row.name)
     except (ValueError, TypeError):
-        return {"season": SEASON, "rules_version": RULES_VERSION, "source": "fallback"}
+        return {**rules_versions(), "source": "fallback"}
 
 
 def position_name(element_type: int) -> str:

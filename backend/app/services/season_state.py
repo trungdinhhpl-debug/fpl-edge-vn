@@ -61,6 +61,28 @@ def prior_reliability(player: Player, team_short: str | None) -> float:
     return round(max(0.1, w), 3)
 
 
+def stats_season(db: Session, current_season: str | None = None) -> str | None:
+    """Mùa mà các tổng cả-mùa trong bảng `players` thực sự thuộc về.
+
+    Trước khi vòng 1 kết thúc, `bootstrap-static.elements` vẫn phát tổng của mùa
+    TRƯỚC (kiểm chứng 2026-08-05: Haaland 2953 phút / 239 điểm trong khi hạn vòng
+    1 là 2026-08-21). Với đa số hạng mục điều đó chỉ là "dữ liệu cũ", nhưng BPS
+    thì khác: luật BPS đổi giữa hai mùa, nên con số cũ được kiếm theo một thước
+    đo khác và phải quy đổi trước khi dùng (`app/bps_rules.equivalent_bps`).
+
+    Trả None nếu không xác định được tên mùa trước — khi đó engine không quy đổi.
+    """
+    from app import bps_rules, scoring
+
+    finished = db.scalar(
+        select(func.count()).select_from(Fixture).where(Fixture.finished.is_(True))
+    ) or 0
+    current = current_season or scoring.SEASON
+    if finished == 0:
+        return bps_rules.previous_season(current)
+    return current
+
+
 def classify_phase(finished: int, max_team_matches: int) -> tuple[str, str | None, str]:
     """(phase, banner label, system confidence) from match counts alone.
 

@@ -120,3 +120,133 @@ def test_xp_uses_updated_goal_points():
     assert after.xp > before.xp
 
     scoring.apply_config(SAMPLE_CONFIG)   # trả lại luật gốc cho các test khác
+
+
+# --------------------------------------------------- BPS: luật riêng theo mùa ----
+#
+# FPL không phát trọng số BPS qua API, nên chúng nằm trong app/bps_rules.py và
+# phải được đánh phiên bản theo mùa. Nhóm test này khoá hai điều dễ vỡ lại:
+# phiên bản phải đi theo mùa, và tổng BPS mang từ mùa trước sang phải được quy
+# đổi trước khi vào mô hình bonus.
+def test_bps_rules_follow_the_season():
+    from app import bps_rules
+
+    scoring.apply_config(SAMPLE_CONFIG)                  # 2026/27
+    assert scoring.BPS_RULES.version == "2026.1"
+    assert scoring.BPS_RULES_KNOWN is True
+    assert scoring.BPS_RULES.cbi_per_bps == 3            # 1 BPS mỗi 3 CBI
+    assert bps_rules.for_season("2025/26").cbi_per_bps == 2
+    assert bps_rules.for_season("2025/26").tackled_bps == -1
+    assert scoring.BPS_RULES.tackled_bps == 0            # đã bỏ hạng mục
+
+    # mùa chưa khai báo: dùng bộ mới nhất nhưng KHÔNG được báo là đã biết
+    future = json.loads(json.dumps(SAMPLE_CONFIG))
+    future["settings"]["static_content_url"] = ".../plfpl-production/2030_31/"
+    scoring.apply_config(future)
+    assert scoring.BPS_RULES_KNOWN is False
+    assert scoring.BPS_RULES.version == bps_rules.LATEST.version
+
+    scoring.apply_config(SAMPLE_CONFIG)
+
+
+def test_previous_season_parsing():
+    from app.bps_rules import previous_season
+
+    assert previous_season("2026/27") == "2025/26"
+    assert previous_season("2030/31") == "2029/30"
+    assert previous_season("unknown") is None
+    assert previous_season(None) is None
+
+
+def test_carryover_bps_rescaled_for_cbi_change():
+    """Trung vệ: BPS mùa trước phải bị hạ vì CBI đổi từ 1/2 sang 1/3 BPS."""
+    from app.bps_rules import BPS_2025_26, BPS_2026_27, equivalent_bps
+
+    same = dict(bps=600.0, cbi=360.0, saves=0.0, minutes=3200.0)
+    # cùng bộ luật thì không quy đổi
+    assert equivalent_bps(**same, from_rules=BPS_2026_27, to_rules=BPS_2026_27) == 600.0
+
+    out = equivalent_bps(**same, from_rules=BPS_2025_26, to_rules=BPS_2026_27)
+    assert out == pytest.approx(600.0 - 360.0 / 6, abs=1e-6)   # ΔBPS = −CBI/6
+    assert out < 600.0
+
+    # cầu thủ không có hành động phòng ngự thì không bị ảnh hưởng
+    none_cbi = equivalent_bps(
+        bps=600.0, cbi=0.0, saves=0.0, minutes=3200.0,
+        from_rules=BPS_2025_26, to_rules=BPS_2026_27,
+    )
+    assert none_cbi == 600.0
+
+    # không bao giờ trả về số âm
+    assert equivalent_bps(
+        bps=1.0, cbi=600.0, saves=0.0, minutes=3200.0,
+        from_rules=BPS_2025_26, to_rules=BPS_2026_27,
+    ) == 0.0
+
+
+def test_xp_bonus_lower_when_bps_earned_under_old_rules():
+    """Đường ĐỌC tự bảo vệ: chỉ cần nói tổng thuộc mùa nào là xP tự quy đổi."""
+    from app.engine.xpoints import expected_points
+
+    scoring.apply_config(SAMPLE_CONFIG)                  # đang chơi 2026/27
+    common = dict(
+        element_type=2, minutes_season=3200, xg_season=1.5, xa_season=1.0,
+        saves_season=0, dc_season=350, yellow_season=6, red_season=0,
+        bps_season=600, cbi_season=360.0, penalties_order=None,
+        xmins=85, p_start=0.9, p_appear=0.95, p_60_plus=0.88,
+        lam_team_goals=1.4, lam_conceded=1.1, team_avg_gf=1.4,
+    )
+
+    as_current = expected_points(**common, stats_season=None)
+    carried = expected_points(**common, stats_season="2025/26")
+
+    assert carried.bonus < as_current.bonus
+    assert carried.xp < as_current.xp
+    # không đụng tới các thành phần khác
+    assert carried.goals == pytest.approx(as_current.goals)
+    assert carried.defcon == pytest.approx(as_current.defcon)
+
+
+def test_rules_versions_covers_every_season_rules_column():
+    """`rules_versions()` phải khớp đúng các cột của bảng season_rules."""
+    scoring.apply_config(SAMPLE_CONFIG)
+    v = scoring.rules_versions()
+    for key in (
+        "scoring_rules_version",
+        "bps_rules_version",
+        "assist_rules_version",
+        "chip_rules_version",
+        "source_url",
+    ):
+        assert v.get(key), f"thiếu {key}"
+    assert v["scoring_rules_version"] == scoring.rules_hash(SAMPLE_CONFIG)
+    assert v["bps_rules_version"] == "2026.1"
+
+
+def test_meta_version_publishes_bps_provenance():
+    """Thanh phiên bản trên web phải nói được BPS từ đâu và có từ bao giờ.
+
+    Trọng số BPS không đến từ FPL API, nên nếu giao diện hiện nó cạnh những con số
+    lấy từ API mà không phân biệt nguồn thì người đọc sẽ tưởng cả hai đều là số
+    chính thức.
+    """
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    body = TestClient(app).get("/api/meta/version").json()
+
+    # nhãn dễ đọc VÀ vân tay chính xác, cả hai đều phải có
+    assert body["rules_label"].startswith("v")
+    assert body["rules_revision"] >= 1
+    assert body["rules_version"]
+    assert body["rules_label"] != body["rules_version"]
+
+    assert body["bps_rules_version"]
+    assert body["bps_rules_source_url"].startswith("http")
+    assert "bps_rules_known" in body
+    # ngày công bố là ISO hoặc None — giao diện hiện "chưa rõ" khi None
+    eff = body["bps_rules_effective_from"]
+    assert eff is None or len(eff) == 10
+
+    assert body["projection_version"]

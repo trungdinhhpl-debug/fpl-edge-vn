@@ -40,11 +40,22 @@ two changes. Two consequences worth knowing:
   * xpoints.py may keep pricing a clean sheet as exp(-lambda_conceded) — the DC
     grid would give it the same number, so nothing downstream has to change.
 
-Prices are de-vigged by normalising implied probabilities across the outcomes of
-each market, and averaged over all bookmakers offering that line. Handicap and
-integer totals refund the stake on a push, so their de-vigged price is a
-probability *conditional on no push* — the model side is conditioned the same
-way before the residual is taken.
+Prices are de-vigged **per bookmaker** — implied probabilities are normalised
+across that book's own outcomes — and only then combined across books, so one
+book's margin never leaks into another's price. Handicap and integer totals
+refund the stake on a push, so their de-vigged price is a probability
+*conditional on no push* — the model side is conditioned the same way before the
+residual is taken.
+
+Books are combined by **median**, not mean. The mean lets a single stale or
+mispriced book move the consensus by 1/n; the median ignores it unless it is
+near the middle. For 1X2 the median is taken per outcome and then renormalised,
+because three independent medians do not sum to 1.
+
+What we deliberately do NOT do: weight books by liquidity or historical
+accuracy. The Odds API publishes neither turnover nor settled results, so any
+such weight would be a number we invented. Equal-weight median is the strongest
+consensus available from the data we actually have.
 
 If no licensed key is configured we return nothing and the engine falls back to
 its internal model, clearly labelled `model_estimate` — we never present a model
@@ -66,6 +77,17 @@ MAX_GOALS = 10                 # truncation for the score grid
 # A line must be quoted by at least this share of the books quoting the most
 # popular line to be used, so one book's outlier line cannot drag the fit.
 MIN_LINE_SUPPORT = 0.25
+
+
+def _median(xs: list[float]) -> float:
+    """Trung vị — chống được một nhà cái treo giá lệch, khác với trung bình."""
+    if not xs:
+        return 0.0
+    s = sorted(xs)
+    mid = len(s) // 2
+    if len(s) % 2:
+        return s[mid]
+    return (s[mid - 1] + s[mid]) / 2.0
 
 
 @dataclass
@@ -358,11 +380,14 @@ def match_team_id(odds_name: str, fpl_teams: dict[int, str]) -> int | None:
 
 # ------------------------------------------------------- market parsing -----
 def _consensus_lines(quotes: list[tuple[float, float]]) -> list[tuple[float, float]]:
-    """Average each quoted line across books, dropping thinly-quoted outliers.
+    """Median price per quoted line, dropping thinly-quoted outliers.
 
-    Books do not all hang the same line. Averaging prices *across* different
+    Books do not all hang the same line. Combining prices *across* different
     lines would be meaningless, so each line becomes its own observation for the
     fit; lines quoted by far fewer books than the main one are dropped.
+
+    Within a line the median is used rather than the mean — a single book pricing
+    Over 2.5 at 1.60 when everyone else is at 1.90 should not move the consensus.
     """
     if not quotes:
         return []
@@ -375,7 +400,7 @@ def _consensus_lines(quotes: list[tuple[float, float]]) -> list[tuple[float, flo
     # a real share of the main line's support.
     floor = 1 if top < 2 else max(2, math.ceil(MIN_LINE_SUPPORT * top))
     return [
-        (line, sum(ps) / len(ps))
+        (line, _median(ps))
         for line, ps in sorted(grouped.items())
         if len(ps) >= floor
     ]
@@ -478,10 +503,16 @@ class OddsAPIProvider(ProbabilityProvider):
             if not h2h_probs:
                 continue
 
-            n = len(h2h_probs)
-            p_home = sum(p[0] for p in h2h_probs) / n
-            p_draw = sum(p[1] for p in h2h_probs) / n
-            p_away = sum(p[2] for p in h2h_probs) / n
+            # Trung vị theo từng kết cục, rồi chuẩn hoá lại: ba trung vị độc lập
+            # không tự cộng thành 1, nên bỏ bước chuẩn hoá là đưa một bộ xác suất
+            # không hợp lệ vào hàm khớp λ.
+            m_home = _median([p[0] for p in h2h_probs])
+            m_draw = _median([p[1] for p in h2h_probs])
+            m_away = _median([p[2] for p in h2h_probs])
+            tot = m_home + m_draw + m_away
+            if tot <= 0:
+                continue
+            p_home, p_draw, p_away = m_home / tot, m_draw / tot, m_away / tot
 
             totals = _consensus_lines(total_quotes)
             handicaps = _consensus_lines(hcp_quotes)

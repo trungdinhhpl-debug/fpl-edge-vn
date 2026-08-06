@@ -36,6 +36,18 @@ class FreeHitRequest(BaseModel):
     excluded: list[int] = Field(default_factory=list)
 
 
+class ChipCalendarRequest(BaseModel):
+    """Đội hình là tuỳ chọn: không có đội thì bảng vẫn trả về cửa sổ chip, lịch
+    blank/double và giới hạn, chỉ thiếu phần điểm (đánh dấu `needs_squad`)."""
+
+    squad_ids: list[int] = Field(default_factory=list, max_length=15)
+    bank: int = Field(0, ge=0, description="Bank in tenths of a million")
+    free_transfers: int = Field(1, ge=1, le=5)
+    # tên chip FPL đã dùng ("wildcard", "freehit", "bboost", "3xc"); dùng để
+    # loại chip đã tiêu và tính rủi ro hết hạn cho các chip còn lại
+    chips_used: list[str] = Field(default_factory=list)
+
+
 class ChatRequest(BaseModel):
     question: str = Field(..., min_length=1, max_length=500)
 

@@ -20,6 +20,7 @@ from app.models import (
     Player,
     PlayerPrice,
     Season,
+    SeasonRules,
     SourceFetchLog,
     Team,
 )
@@ -101,10 +102,39 @@ def sync_season_rules(db: Session, data: dict) -> dict:
 
     db.flush()
     applied = apply_config(gc, name)
+    _upsert_season_rules(db, season, now)
     _log(db, "FPL game_config", "bootstrap-static", "ok", 1,
          f"mùa {name}, luật {version}" + (" (ĐỔI LUẬT)" if changed else ""), "official")
     return {"ok": True, "season": name, "rules_version": version, "changed": changed,
             **applied}
+
+
+def _upsert_season_rules(db: Session, season: Season, now: datetime) -> None:
+    """Ghi phiên bản từng nhóm luật vào `season_rules`.
+
+    Gọi SAU `apply_config` để `scoring.rules_versions()` đã phản ánh mùa mới.
+    Một dòng cho mỗi mốc hiệu lực: nếu FPL sửa luật giữa mùa thì phiên bản mới
+    được thêm vào chứ không ghi đè, để còn biết dự báo cũ chạy trên luật nào.
+    """
+    from app.scoring import rules_versions
+
+    v = rules_versions()
+    effective = season.rules_updated_at or now
+    row = db.scalar(
+        select(SeasonRules).where(
+            SeasonRules.season_id == season.id,
+            SeasonRules.effective_from == effective,
+        )
+    )
+    if row is None:
+        row = SeasonRules(season_id=season.id, effective_from=effective)
+        db.add(row)
+    row.scoring_rules_version = v["scoring_rules_version"]
+    row.bps_rules_version = v["bps_rules_version"]
+    row.assist_rules_version = v["assist_rules_version"]
+    row.chip_rules_version = v["chip_rules_version"]
+    row.source_url = v["source_url"]
+    db.flush()
 
 
 # ------------------------------------------------------------------ bootstrap --

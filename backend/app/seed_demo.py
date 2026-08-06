@@ -8,6 +8,7 @@ Everything here is SYNTHETIC. Never mix into production recommendations.
 """
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta, timezone
 
 import numpy as np
@@ -46,7 +47,28 @@ def seed_demo(db: Session, n_finished: int = 4, n_gameweeks: int = 10) -> dict:
         db.execute(delete(model))
     db.commit()
 
-    db.add(Season(name="DEMO", is_current=True, scoring_source=SCORING_SOURCE))
+    # Chip cũng phải có trong bản demo: thiếu `chips_json` thì Chip Calendar rỗng,
+    # và một trang rỗng trong chế độ offline trông như tính năng bị lỗi. Cấu trúc
+    # giống hệt FPL trả về (hai bộ chip, wildcard/freehit mở từ vòng 2).
+    half = max(2, n_gameweeks // 2)
+    demo_chips = [
+        {"name": "wildcard", "chip_type": "transfer", "start_event": 2, "stop_event": half},
+        {"name": "freehit", "chip_type": "transfer", "start_event": 2, "stop_event": half},
+        {"name": "bboost", "chip_type": "team", "start_event": 1, "stop_event": half},
+        {"name": "3xc", "chip_type": "team", "start_event": 1, "stop_event": half},
+        {"name": "wildcard", "chip_type": "transfer",
+         "start_event": half + 1, "stop_event": n_gameweeks},
+        {"name": "freehit", "chip_type": "transfer",
+         "start_event": half + 1, "stop_event": n_gameweeks},
+        {"name": "bboost", "chip_type": "team",
+         "start_event": half + 1, "stop_event": n_gameweeks},
+        {"name": "3xc", "chip_type": "team",
+         "start_event": half + 1, "stop_event": n_gameweeks},
+    ]
+    db.add(Season(
+        name="DEMO", is_current=True, scoring_source=SCORING_SOURCE,
+        chips_json=json.dumps(demo_chips, ensure_ascii=False),
+    ))
 
     # gameweeks
     base = datetime(2025, 8, 15, 17, 30, tzinfo=timezone.utc)

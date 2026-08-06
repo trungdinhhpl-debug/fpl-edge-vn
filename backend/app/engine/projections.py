@@ -19,8 +19,10 @@ from app.engine.team_strength import (
     NO_HISTORY_RATIO,
     TeamStrength,
     load_market_map,
+    load_market_support,
     load_promoted_map,
 )
+from app.engine import bonus as bonus_mod
 from app.engine.xmins import estimate_minutes
 from app.engine.xpoints import _poisson_ge_k, expected_points
 from app.models import (
@@ -84,6 +86,8 @@ def build_projections(
         teams, players, finished,
         market=market,
         market_weight=settings.odds_market_weight,
+        market_support=load_market_support(db),
+        full_support_books=settings.odds_full_support_books,
         promoted=load_promoted_map(db),
         promoted_damping=settings.championship_damping,
     )
@@ -112,9 +116,14 @@ def build_projections(
     # How far last season still describes each player (new club / new manager).
     # Neither is in the FPL API, so this comes from a configured list.
     from app.services.season_state import prior_reliability as _prior_rel
+    from app.services.season_state import stats_season as _stats_season
 
     _team_short = {t.id: t.short_name for t in teams}
     prior_rel = {p.id: _prior_rel(p, _team_short.get(p.team_id)) for p in players}
+
+    # Mùa mà tổng cả-mùa của cầu thủ thuộc về. Nếu là mùa trước thì BPS được quy
+    # đổi sang luật đang áp trong xpoints (luật BPS 2026/27 đã đổi).
+    stats_from_season = _stats_season(db)
 
     fx_by_gw = _fixtures_by_gw(fixtures)
     start_gw = get_planning_start_gw(db)
@@ -154,9 +163,94 @@ def build_projections(
                 role_rank[p.id] = i
 
     n_written = 0
+
+    def _minutes_estimate(p, team_id: int):
+        """estimate_minutes cho một cầu thủ ở một trận (thuần, không phụ thuộc vòng)."""
+        return estimate_minutes(
+            element_type=p.element_type,
+            status=p.status,
+            chance_of_playing=p.chance_of_playing_next_round,
+            season_starts=p.starts,
+            season_minutes=p.minutes,
+            team_matches_played=matches_played.get(team_id, 0),
+            recent_minutes=recent_minutes.get(p.id) or None,
+            n_fixtures_this_gw=1,   # per-fixture; DGW handled by summing
+            no_pl_history=team_id in no_history_teams,
+            role_rank=role_rank.get(p.id),
+            prior_reliability=prior_rel.get(p.id, 1.0),
+        )
+
+    def _xp(p, est, lam_for: float, lam_against: float, team_id: int,
+            bonus_override: float | None):
+        return expected_points(
+            element_type=p.element_type,
+            minutes_season=p.minutes,
+            xg_season=p.expected_goals,
+            xa_season=p.expected_assists,
+            saves_season=p.saves,
+            dc_season=p.defensive_contribution,
+            yellow_season=p.yellow_cards,
+            red_season=p.red_cards,
+            bps_season=p.bps,
+            cbi_season=p.clearances_blocks_interceptions or 0.0,
+            stats_season=stats_from_season,
+            bonus_override=bonus_override,
+            penalties_order=p.penalties_order,
+            xmins=est.xmins,
+            p_start=est.p_start,
+            p_appear=est.p_start + est.p_sub,
+            p_60_plus=est.p_60_plus,
+            lam_team_goals=lam_for,
+            lam_conceded=lam_against,
+            team_avg_gf=ts.season_avg_gf(team_id),
+            n_fixtures=1,
+        )
+
+    def _allocate_gw_bonus(gw_fx: dict) -> dict[tuple[int, int], float]:
+        """Chia quỹ 6 điểm bonus của TỪNG TRẬN, trả về {(player_id, fixture_id): bonus}.
+
+        Phải chạy trước vòng lặp chính vì bonus của một cầu thủ phụ thuộc vào 21
+        người còn lại của trận — trong đó có 11 người thuộc đội đối phương, mà vòng
+        lặp chính xử lý mỗi đội một lượt nên không bao giờ thấy cả hai bên cùng lúc.
+
+        Ở đây `expected_points` được gọi thêm một lượt chỉ để lấy nguyên liệu
+        (bps90, bàn/kiến tạo kỳ vọng, xác suất sạch lưới). Nó là phép tính số học
+        thuần, không truy vấn gì, và rẻ hơn nhiều so với Monte Carlo phía sau —
+        đánh đổi này để tránh phải nhân đôi công thức ở hai chỗ.
+        """
+        by_fixture: dict[int, list[bonus_mod.BonusEntry]] = defaultdict(list)
+        for team_id, fixtures in gw_fx.items():
+            for (opp_id, is_home, fixture_id) in fixtures:
+                lam_for, lam_against = ts.expected_goals(team_id, opp_id, is_home)
+                for p in players_by_team.get(team_id, []):
+                    est = _minutes_estimate(p, team_id)
+                    if est.xmins <= 0:
+                        continue
+                    c = _xp(p, est, lam_for, lam_against, team_id, None).components
+                    by_fixture[fixture_id].append(bonus_mod.BonusEntry(
+                        player_id=p.id,
+                        expected_bps=bonus_mod.expected_fixture_bps(
+                            bps90=c["bps90"],
+                            minutes_frac=c["minutes_frac"],
+                            exp_goals=c["exp_goals"],
+                            exp_assists=c["exp_assists"],
+                            cs_prob=c["cs_prob"],
+                            p_60_plus=c["p_60_plus"],
+                            element_type=p.element_type,
+                        ),
+                    ))
+        out: dict[tuple[int, int], float] = {}
+        for fixture_id, entries in by_fixture.items():
+            for pid, val in bonus_mod.allocate(
+                entries, max_bonus=RULES.max_bonus
+            ).items():
+                out[(pid, fixture_id)] = val
+        return out
+
     for gw in gws:
         gw_fx = fx_by_gw.get(gw, {})
         run_mc = True  # run MC across the whole horizon (background job)
+        bonus_by_player_fixture = _allocate_gw_bonus(gw_fx)
 
         # ---- per-team MC draws reused across that team's players ----
         for team in teams:
@@ -172,38 +266,10 @@ def build_projections(
                 mc_players: list[MCPlayer] = []
 
                 for p in squad:
-                    est = estimate_minutes(
-                        element_type=p.element_type,
-                        status=p.status,
-                        chance_of_playing=p.chance_of_playing_next_round,
-                        season_starts=p.starts,
-                        season_minutes=p.minutes,
-                        team_matches_played=matches_played.get(team.id, 0),
-                        recent_minutes=recent_minutes.get(p.id) or None,
-                        n_fixtures_this_gw=1,  # per-fixture; DGW handled by summing
-                        no_pl_history=team.id in no_history_teams,
-                        role_rank=role_rank.get(p.id),
-                        prior_reliability=prior_rel.get(p.id, 1.0),
-                    )
-                    bd = expected_points(
-                        element_type=p.element_type,
-                        minutes_season=p.minutes,
-                        xg_season=p.expected_goals,
-                        xa_season=p.expected_assists,
-                        saves_season=p.saves,
-                        dc_season=p.defensive_contribution,
-                        yellow_season=p.yellow_cards,
-                        red_season=p.red_cards,
-                        bps_season=p.bps,
-                        penalties_order=p.penalties_order,
-                        xmins=est.xmins,
-                        p_start=est.p_start,
-                        p_appear=est.p_start + est.p_sub,
-                        p_60_plus=est.p_60_plus,
-                        lam_team_goals=lam_for,
-                        lam_conceded=lam_against,
-                        team_avg_gf=ts.season_avg_gf(team.id),
-                        n_fixtures=1,
+                    est = _minutes_estimate(p, team.id)
+                    bd = _xp(
+                        p, est, lam_for, lam_against, team.id,
+                        bonus_by_player_fixture.get((p.id, fixture_id)),
                     )
                     # stash analytic breakdown on the player object for this fixture
                     p._acc = getattr(p, "_acc", None) or _Acc()
@@ -237,7 +303,10 @@ def build_projections(
                                 saves90=(p.saves / max(p.minutes, 1) * 90) if p.element_type == 1 else 0.0,
                                 dc_hit_prob=p_hit,
                                 yellow90=p.yellow_cards / max(p.minutes, 1) * 90,
-                                bonus_base=min(0.6, bd.bonus),
+                                # kỳ vọng bonus giải tích, KHÔNG cắt trần: MC quy
+                                # nó thành tần suất (chia 2) nên cắt ở đây sẽ làm
+                                # nhóm đầu bão hoà, xem engine/montecarlo.py
+                                bonus_base=bd.bonus,
                             )
                         )
 

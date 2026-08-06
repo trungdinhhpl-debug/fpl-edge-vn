@@ -11,6 +11,7 @@ from app.config import settings
 from app.ingestion.team_import import import_team
 from app.models import OptimizationRun
 from app.schemas import (
+    ChipCalendarRequest,
     FreeHitRequest,
     LongTermRequest,
     NextGwRequest,
@@ -94,6 +95,28 @@ def opt_wildcard(req: WildcardRequest, db: Session = Depends(get_db)) -> dict:
     gw = planning_start_gw(db)
     result["run_id"] = _persist_run(db, "wildcard", gw, req.horizon, req.model_dump(), result)
     return result
+
+
+@router.post("/chips/calendar")
+def chip_calendar(req: ChipCalendarRequest, db: Session = Depends(get_db)) -> dict:
+    """Bảng chip thống nhất cho cả 8 chip — xem app/services/chip_calendar.py."""
+    from app.services.chip_calendar import chip_calendar as build
+
+    return build(
+        db,
+        squad_ids=req.squad_ids,
+        bank=req.bank,
+        free_transfers=req.free_transfers,
+        chips_used=req.chips_used,
+    )
+
+
+@router.get("/chips/windows")
+def chips_windows(db: Session = Depends(get_db)) -> dict:
+    """Cửa sổ dùng của từng chip, đọc nguyên văn từ FPL (không ghi cứng)."""
+    from app.services.chip_calendar import chip_windows
+
+    return {"windows": chip_windows(db), "current_gameweek": planning_start_gw(db)}
 
 
 @router.get("/optimization/{run_id}")

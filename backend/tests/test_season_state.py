@@ -158,3 +158,35 @@ def test_version_endpoint_carries_the_phase(db):
     assert st["phase"] in ("preseason", "early", "established")
     assert st["system_confidence"] in ("Low", "Medium", "High")
     assert "downweighting" in st
+
+
+def test_stats_season_is_last_season_until_a_match_finishes(db):
+    """Trước vòng 1, tổng cả-mùa của FPL vẫn là số của mùa trước.
+
+    Đây là điều kiện để quy đổi BPS: nếu hàm này trả về mùa đang chơi thì engine
+    sẽ dùng BPS kiếm theo luật cũ như thể nó đã theo luật mới.
+    """
+    from sqlalchemy import select
+
+    from app.models import Fixture
+    from app.services.season_state import stats_season
+
+    # không sửa dữ liệu chung: truyền tên mùa vào thẳng
+    fixtures = db.scalars(select(Fixture)).all()
+    original = [(f.id, f.finished) for f in fixtures]
+    try:
+        for f in fixtures:
+            f.finished = False
+        db.flush()
+        assert stats_season(db, "2026/27") == "2025/26"
+
+        if fixtures:
+            fixtures[0].finished = True
+            db.flush()
+            assert stats_season(db, "2026/27") == "2026/27"
+    finally:
+        by_id = {f.id: f for f in fixtures}
+        for fid, was in original:
+            by_id[fid].finished = was
+        db.flush()
+        db.rollback()

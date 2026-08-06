@@ -3,7 +3,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState } from "react";
 import {
-  LayoutDashboard, Users, CalendarRange, Crown, Search, Zap,
+  LayoutDashboard, Users, CalendarRange, CalendarCheck2, Crown, Search, Zap,
   Newspaper, MessageSquareQuote, BookOpen, Shield, Menu, X, Globe,
 } from "lucide-react";
 import { ThemeToggle } from "@/components/theme-toggle";
@@ -14,6 +14,7 @@ const items = [
   { href: "/", key: "dashboard", icon: LayoutDashboard },
   { href: "/my-team", key: "myTeam", icon: Shield },
   { href: "/planner", key: "planner", icon: CalendarRange },
+  { href: "/chips", key: "chips", icon: CalendarCheck2 },
   { href: "/free-hit", key: "freeHit", icon: Zap },
   { href: "/captaincy", key: "captaincy", icon: Crown },
   { href: "/players", key: "players", icon: Search },

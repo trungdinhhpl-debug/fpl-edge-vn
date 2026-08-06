@@ -47,6 +47,10 @@ class Settings(BaseSettings):
     odds_api_key: str = ""
     # how far to trust bookmaker consensus over the internal model, 0..1
     odds_market_weight: float = 0.7
+    # Số nhà cái để trọng số trên đạt mức đầy đủ. Trận ít nhà cái ra giá hơn thì
+    # trọng số hạ theo tỷ lệ (dốc tuyến tính), vì đồng thuận mỏng là bằng chứng
+    # yếu hơn. Đặt = 1 để trở lại hành vi cũ (luôn dùng trọng số đầy đủ).
+    odds_full_support_books: int = 8
     # Also pull the Asian handicap (`spreads`). It is the sharpest of the three
     # markets, but a request costs (markets x regions) credits, so this takes a
     # sync from 2 to 3 against the monthly quota.

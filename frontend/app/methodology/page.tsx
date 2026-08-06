@@ -54,7 +54,48 @@ export default function MethodologyPage() {
               xP = ra sân + bàn + kiến tạo + sạch lưới + cứu thua + bonus + def.contribution − thẻ − thủng lưới
             </code>
             <p>Tỷ lệ per-90 (xG, xA, def. contribution) được <b>Bayesian shrinkage</b> về mức nền theo vị trí để tránh đánh giá quá cao mẫu nhỏ, rồi nhân với xMins và độ khó trận đấu (mô hình Poisson theo sức mạnh đội).</p>
-            <p>Luật tính điểm đọc từ cấu hình mùa hiện tại (2025/26, gồm <b>Defensive Contribution</b>) — không hard-code luật mùa cũ.</p>
+            <p>Luật tính điểm đọc từ <code>game_config</code> của FPL cho mùa đang chạy (gồm <b>Defensive Contribution</b>) — không hard-code tên mùa hay điểm từng hạng mục.</p>
+            <p>
+              Riêng <b>trọng số BPS thì FPL không phát qua API</b>, nên chúng được đánh phiên
+              bản theo mùa trong code. Mùa <b>2026/27</b> hạ BPS từ clearances/blocks/interceptions
+              (1 điểm mỗi 3 hành động thay vì mỗi 2), bỏ trừ điểm khi bị qua người và thêm thưởng
+              cứu thua từ big chance. Vì trước vòng 1 FPL vẫn phát tổng BPS của <i>mùa trước</i>,
+              tổng đó được <b>quy đổi về luật mùa này</b> trước khi vào mô hình bonus — nếu không,
+              trung vệ sẽ bị định giá cao hơn thực tế.
+            </p>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader><CardTitle>Bonus — chia quỹ 6 điểm mỗi trận</CardTitle></CardHeader>
+          <CardContent className="space-y-2 text-sm text-muted-foreground">
+            <p>
+              Mỗi trận FPL phát đúng <b>6 điểm bonus</b> (3 + 2 + 1) cho ba người có BPS cao
+              nhất; người thứ tư được 0 dù BPS bao nhiêu. Nên bonus <b>không phải thuộc tính
+              của một cầu thủ</b> mà là kết quả tranh giành trong một trận cụ thể — không thể
+              tính từ một người đứng riêng.
+            </p>
+            <code className="block rounded bg-muted p-2 text-xs text-foreground">
+              trọng số = (BPS kỳ vọng trong trận)^1.99 · bonus = 6 × trọng số / Σ trọng số (cả hai đội)
+            </code>
+            <p>
+              Số mũ <b>1.99 đo từ dữ liệu</b> (hồi quy log-log bonus/90 theo BPS/90 trên 252
+              cầu thủ đá từ 900 phút mùa 2025/26), không phải hệ số chọn tay. Nó lớn hơn 1 vì
+              cơ chế top-3: BPS gấp đôi cho bonus gấp khoảng bốn lần.
+            </p>
+            <p>
+              Cách chia này <b>bảo toàn quỹ theo đúng luật</b>: tổng bonus mô hình phân bổ cho
+              một vòng 10 trận là 60.0 điểm. Bản trước tính bonus như một công thức rời và chỉ
+              phân bổ <b>2.47 điểm mỗi trận</b> — hụt khoảng 60% ở mọi vị trí.
+            </p>
+            <p>
+              Phần còn hụt được nói rõ chứ không lấp: hậu vệ hiện ở khoảng <b>68%</b> mức bonus
+              thực nhận mùa trước. Một phần là đúng (luật BPS 2026/27 hạ điểm CBI nên hậu vệ
+              thật sự kiếm ít hơn, khoảng −13% sau khi tính số mũ), phần còn lại chưa giải
+              thích được. Chúng tôi không nhân thêm hệ số theo vị trí để kéo về 100%, vì mốc so
+              sánh vừa theo luật BPS mùa cũ, vừa được chia theo số phút cuối mùa — thông tin mà
+              ở vòng 1 không ai có.
+            </p>
           </CardContent>
         </Card>
 
@@ -79,8 +120,24 @@ export default function MethodologyPage() {
               từng đội.
             </p>
             <p>
-              Giá đã khử biên lợi nhuận (de-vig) và lấy trung bình nhiều nhà cái, sau đó
-              pha với mô hình nội bộ theo trọng số {data?.market_odds?.market_weight ?? 0.7} cho thị trường.
+              Giá được <b>khử biên lợi nhuận (de-vig) theo từng nhà cái trước</b>, rồi mới tổng
+              hợp — biên của một nhà cái không lẫn sang giá của nhà cái khác. Tổng hợp bằng{" "}
+              <b>trung vị</b> chứ không phải trung bình: trung bình cho mỗi nhà cái quyền dịch
+              đồng thuận 1/n nên một nhà cái treo giá cũ là đủ kéo lệch, trung vị thì không.
+              Với 1X2, trung vị lấy theo từng kết cục rồi chuẩn hoá lại.
+            </p>
+            <p>
+              Sau đó pha với mô hình nội bộ theo trọng số{" "}
+              {data?.market_odds?.market_weight ?? 0.7} cho thị trường — nhưng trọng số này{" "}
+              <b>hạ theo độ mỏng của thị trường</b> (nhân với số nhà cái chia cho{" "}
+              {data?.market_odds?.full_support_books ?? 8}, tối đa 1). Đồng thuận 20 nhà cái và
+              giá lẻ của 2 nhà cái không phải cùng một loại bằng chứng.
+            </p>
+            <p>
+              Hệ thống <b>không</b> gán trọng số cho nhà cái theo thanh khoản hay độ chính xác
+              lịch sử: nguồn dữ liệu không công bố doanh số cũng không công bố kết quả đã quyết
+              toán, nên một trọng số như vậy sẽ là số tự đặt. Trung vị đồng trọng số là đồng
+              thuận mạnh nhất mà dữ liệu hiện có cho phép.
             </p>
             <p>
               Vòng <b>chưa có kèo</b> dùng mô hình nội bộ và được gắn nhãn “model estimate” —

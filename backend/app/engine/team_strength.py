@@ -62,6 +62,21 @@ def load_market_map(db) -> dict[tuple[int, int], tuple[float, float]]:
     return {(r.team_h, r.team_a): (r.lam_home, r.lam_away) for r in rows}
 
 
+def load_market_support(db) -> dict[tuple[int, int], int]:
+    """(home, away) -> số nhà cái đã ra giá cho trận đó.
+
+    Tách khỏi `load_market_map` để không đổi hình dạng tuple mà mọi nơi đang dùng.
+    Dùng để hạ trọng số thị trường khi trận chỉ có vài nhà cái ra giá: đồng thuận
+    của 20 nhà cái và giá lẻ của 2 nhà cái không phải cùng một loại bằng chứng.
+    """
+    from sqlalchemy import select
+
+    from app.models import MarketOdds
+
+    rows = db.scalars(select(MarketOdds)).all()
+    return {(r.team_h, r.team_a): int(r.n_bookmakers or 0) for r in rows}
+
+
 def load_promoted_map(db) -> dict[int, tuple[float, float]]:
     """{team_id: (attack_index, defence_index)} từ Championship mùa trước.
 
@@ -102,13 +117,21 @@ class TeamStrength:
         market_weight: float = 0.7,
         promoted: dict[int, tuple[float, float]] | None = None,
         promoted_damping: float = 0.35,
+        market_support: dict[tuple[int, int], int] | None = None,
+        full_support_books: int = 8,
     ) -> None:
         """`market` maps (home_team_id, away_team_id) -> (lam_home, lam_away)
         from bookmaker prices. Where present it is blended over the internal
-        model (spec §3: licensed market data outranks a model estimate)."""
+        model (spec §3: licensed market data outranks a model estimate).
+
+        `market_support` gives the number of books behind each fixture; the blend
+        weight is scaled down when that number is small (see `_weight_for`).
+        Omitting it keeps the old behaviour — full weight everywhere."""
         self._rates: dict[int, TeamRates] = {}
         self._market = market or {}
         self._market_weight = market_weight
+        self._market_support = market_support or {}
+        self._full_support_books = max(1, full_support_books)
         # {team_id: (attack_index, defence_index)} tương đối trong Championship
         self._promoted = promoted or {}
         self._promoted_damping = promoted_damping
@@ -117,6 +140,23 @@ class TeamStrength:
     def has_market(self, team_id: int, opp_id: int, is_home: bool) -> bool:
         key = (team_id, opp_id) if is_home else (opp_id, team_id)
         return key in self._market
+
+    def _weight_for(self, key: tuple[int, int]) -> float:
+        """Trọng số thị trường cho MỘT trận, hạ xuống khi ít nhà cái ra giá.
+
+        Đồng thuận 20 nhà cái và giá lẻ của 2 nhà cái vào cùng công thức với cùng
+        trọng số 0.7 là coi hai loại bằng chứng như nhau. Dốc tuyến tính tới
+        `full_support_books` rồi giữ nguyên: đủ nhà cái thì không thay đổi gì so
+        với trước, thiếu thì tự động nghiêng về mô hình nội bộ.
+
+        Không có `n_bookmakers` (dữ liệu cũ ghi trước khi có cột này) thì giữ
+        nguyên trọng số đầy đủ — hạ trọng số vì THIẾU THÔNG TIN sẽ âm thầm làm
+        yếu đi những trận vốn có giá tốt.
+        """
+        n = self._market_support.get(key)
+        if not n:
+            return self._market_weight
+        return self._market_weight * min(1.0, n / self._full_support_books)
 
     # ---------------------------------------------------------------- build ---
     def _build(self, teams, players, finished_fixtures) -> None:
@@ -269,7 +309,7 @@ class TeamStrength:
         mk = self._market.get(key)
         if mk:
             mk_for, mk_against = (mk[0], mk[1]) if is_home else (mk[1], mk[0])
-            w = self._market_weight
+            w = self._weight_for(key)
             lam_for = w * mk_for + (1 - w) * lam_for
             lam_against = w * mk_against + (1 - w) * lam_against
 
