@@ -405,6 +405,7 @@ def build_projections(
                     clean_sheet_prob=round(acc.cs_prob, 3), goal_prob=round(acc.goal_prob, 3),
                     assist_prob=round(acc.assist_prob, 3),
                     mc_mean=round(mc["mc_mean"], 2), mc_median=round(mc["mc_median"], 2),
+                    mc_p10=round(mc["mc_p10"], 2),
                     mc_p25=round(mc["mc_p25"], 2), mc_p75=round(mc["mc_p75"], 2),
                     mc_p90=round(mc["mc_p90"], 2), mc_ceiling=round(mc["mc_ceiling"], 2),
                     p_blank=round(mc["p_blank"], 3), p_returns=round(mc["p_returns"], 3),
@@ -431,7 +432,8 @@ def build_projections(
 def _analytic_dist(xp: float) -> dict:
     """Fallback distribution when MC wasn't run for a player (blank-ish)."""
     return {
-        "mc_mean": xp, "mc_median": max(0, xp - 0.5), "mc_p25": max(0, xp - 1.5),
+        "mc_mean": xp, "mc_median": max(0, xp - 0.5),
+        "mc_p10": max(0.0, xp - 2.5), "mc_p25": max(0, xp - 1.5),
         "mc_p75": xp + 1.5, "mc_p90": xp + 3.5, "mc_ceiling": xp + 5.0,
         "p_blank": 0.4 if xp < 3 else 0.25, "p_returns": min(0.6, xp / 8),
         "p_haul": min(0.2, xp / 30), "p_15": min(0.08, xp / 90),

@@ -45,6 +45,14 @@ class Settings(BaseSettings):
 
     # The Odds API (optional) — probability provider. Empty => internal model fallback.
     odds_api_key: str = ""
+    # Giá của việc TIÊU một free transfer bây giờ, tính bằng điểm. Đây là GIÁ TRỊ
+    # QUYỀN CHỌN của việc chờ thêm tin đội hình — không phải một lượng suy ra được
+    # từ dự báo. Kế toán FT thuần xP cho thấy giữ lại không mua thêm nước nào, chỉ
+    # trì hoãn nước tốt nhất một vòng; nên phần còn lại đúng là giá của thông tin.
+    # Sẽ đo được từ projection_snapshots sau vài chục vòng (bao nhiêu % số lần nước
+    # tốt nhất đổi giữa lần chụp đầu và deadline). Xem services/transfer_verdict.py.
+    ft_option_value: float = 0.8
+
     # how far to trust bookmaker consensus over the internal model, 0..1
     odds_market_weight: float = 0.7
     # Số nhà cái để trọng số trên đạt mức đầy đủ. Trận ít nhà cái ra giá hơn thì

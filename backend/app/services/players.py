@@ -4,7 +4,14 @@ from __future__ import annotations
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import ExpertSignal, ExpertSource, Fixture, Player, PlayerProjection
+from app.models import (
+    ExpertSignal,
+    ExpertSource,
+    Fixture,
+    Player,
+    PlayerGameweekStat,
+    PlayerProjection,
+)
 from app.services.common import (
     horizon_xp,
     planning_start_gw,
@@ -40,6 +47,107 @@ def _proj_public(proj: PlayerProjection | None) -> dict:
         "p_blank": proj.p_blank,
         "opponent_team": proj.opponent_team,
         "was_home": proj.was_home,
+    }
+
+
+def player_scorecard(db: Session, player_id: int, gw: int | None = None) -> dict | None:
+    """Bộ chỉ số đầy đủ của một cầu thủ, gộp phân phối điểm với rủi ro.
+
+    Gộp vào một chỗ vì chúng phải đọc CÙNG NHAU: xP 5.0 với P10 = 0 và rotation
+    risk Cao không phải cùng một món hàng với xP 5.0 của người chắc suất. Trước đây
+    các con số này nằm rải ở nhiều endpoint hoặc không tồn tại.
+    """
+    from app.models import ExpectedMinutes
+    from app.services import player_risk as risk
+
+    p = db.get(Player, player_id)
+    if not p:
+        return None
+
+    gw = gw or planning_start_gw(db)
+    proj = db.scalar(
+        select(PlayerProjection).where(
+            PlayerProjection.player_id == player_id,
+            PlayerProjection.gameweek == gw,
+        )
+    )
+    xm = db.scalar(
+        select(ExpectedMinutes).where(
+            ExpectedMinutes.player_id == player_id, ExpectedMinutes.gameweek == gw
+        )
+    )
+
+    # mức người thay thế: tính trên toàn bộ cầu thủ cùng vòng, theo vị trí
+    all_projs = db.scalars(
+        select(PlayerProjection).where(PlayerProjection.gameweek == gw)
+    ).all()
+    pos_of = {
+        row.id: row.element_type for row in db.scalars(select(Player)).all()
+    }
+    xp_by_pos: dict[int, list[float]] = {}
+    for r in all_projs:
+        pos = pos_of.get(r.player_id)
+        if pos is not None:
+            xp_by_pos.setdefault(pos, []).append(r.xp)
+    repl = risk.replacement_level(xp_by_pos).get(p.element_type, 0.0)
+
+    recent = [
+        s.minutes
+        for s in db.scalars(
+            select(PlayerGameweekStat)
+            .where(PlayerGameweekStat.player_id == player_id)
+            .order_by(PlayerGameweekStat.gameweek)
+        ).all()
+    ]
+
+    dist = None
+    if proj:
+        dist = {
+            # xP giải tích là con số dùng để xếp hạng; mc_mean là trung bình của mô
+            # phỏng. Hiện cả hai vì lệch nhau là dấu hiệu mô phỏng chưa khớp.
+            "xp_mean": round(proj.xp, 2),
+            "mc_mean": round(proj.mc_mean, 2),
+            "median": round(proj.mc_median, 2),
+            "p10": None if proj.mc_p10 is None else round(proj.mc_p10, 2),
+            "p25": round(proj.mc_p25, 2),
+            "p75": round(proj.mc_p75, 2),
+            "p90": round(proj.mc_p90, 2),
+            "p95_ceiling": round(proj.mc_ceiling, 2),
+            "p_blank": proj.p_blank,
+            "p_haul": proj.p_haul,
+        }
+
+    return {
+        **player_public(p, team_lookup(db).get(p.team_id)),
+        "gameweek": gw,
+        "distribution": dist,
+        "minutes": {
+            "xmins": None if not proj else round(proj.xmins, 1),
+            "p_start": None if not proj else proj.p_start,
+            # P(không ra sân) chỉ có ở bảng expected_minutes, không ở projection
+            "p_dnp": None if not xm else round(xm.p_no_play, 3),
+            "p_60_plus": None if not xm else round(xm.p_60_plus, 3),
+            "ci_low": None if not xm else round(xm.ci_low, 1),
+            "ci_high": None if not xm else round(xm.ci_high, 1),
+            "reason": None if not xm else xm.reason,
+        },
+        "vorp": risk.vorp(proj.xp if proj else 0.0, repl),
+        "rotation_risk": risk.rotation_risk(proj.p_start if proj else 0.0, recent),
+        "injury_risk": risk.injury_risk(
+            p.status, p.chance_of_playing_next_round, p.news, p.news_added
+        ),
+        "price_risk": risk.price_risk(
+            p.transfers_in_event, p.transfers_out_event, p.selected_by_percent
+        ),
+        "source_freshness": risk.source_freshness(db, p),
+        "model_confidence": {
+            "value": None if not proj else round(proj.confidence, 3),
+            "label": None if not xm else xm.confidence,
+            "model_version": None if not proj else proj.model_version,
+            "data_cutoff": (
+                proj.data_cutoff.isoformat() if proj and proj.data_cutoff else None
+            ),
+        },
     }
 
 

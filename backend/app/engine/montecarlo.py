@@ -218,6 +218,9 @@ def summarise(points: np.ndarray) -> dict:
     return {
         "mc_mean": float(np.mean(points)),
         "mc_median": float(np.median(points)),
+        # P10 là "sàn xấu": mức mà 1 trong 10 vòng sẽ tệ hơn. Cần cho quyết
+        # định giữ/bán, vì P25 chưa chạm phần đuôi mà người chơi thật sự sợ.
+        "mc_p10": float(np.percentile(points, 10)),
         "mc_p25": float(np.percentile(points, 25)),
         "mc_p75": float(np.percentile(points, 75)),
         "mc_p90": float(np.percentile(points, 90)),

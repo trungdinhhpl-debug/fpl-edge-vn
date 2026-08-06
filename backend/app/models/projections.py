@@ -189,6 +189,9 @@ class PlayerProjection(Base):
     # Monte Carlo distribution summary
     mc_mean: Mapped[float] = mapped_column(Float, default=0.0)
     mc_median: Mapped[float] = mapped_column(Float, default=0.0)
+    # Nullable để db.ensure_columns() thêm được vào bảng đang chạy — nó chỉ
+    # thêm cột cho phép NULL.
+    mc_p10: Mapped[float | None] = mapped_column(Float, nullable=True, default=0.0)
     mc_p25: Mapped[float] = mapped_column(Float, default=0.0)
     mc_p75: Mapped[float] = mapped_column(Float, default=0.0)
     mc_p90: Mapped[float] = mapped_column(Float, default=0.0)

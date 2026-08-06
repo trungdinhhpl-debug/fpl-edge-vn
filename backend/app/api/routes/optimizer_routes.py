@@ -111,6 +111,16 @@ def chip_calendar(req: ChipCalendarRequest, db: Session = Depends(get_db)) -> di
     )
 
 
+@router.post("/optimizer/transfer-verdict")
+def opt_transfer_verdict(req: NextGwRequest, db: Session = Depends(get_db)) -> dict:
+    """Khuyến nghị ROLL / TRANSFER theo cấu trúc cố định, kèm điều chỉnh và lý do."""
+    from app.services.transfer_verdict import transfer_verdict
+
+    return transfer_verdict(
+        db, req.squad_ids, bank=req.bank, free_transfers=req.free_transfers
+    )
+
+
 @router.get("/model/performance")
 def model_performance(db: Session = Depends(get_db)) -> dict:
     """Chất lượng dự báo đo bằng kết quả thật — xem app/services/model_performance.py."""

@@ -7,6 +7,7 @@ import {
   Tooltip, XAxis, YAxis,
 } from "recharts";
 import { useApi } from "@/lib/api";
+import { PlayerScorecard } from "@/components/player-scorecard";
 import { Card, CardContent, CardHeader, CardTitle, Spinner, ErrorBox, Badge, Stat } from "@/components/ui";
 import { PlayerAvatar, PosTag, RiskBadge, MockTag } from "@/components/fpl";
 import { fmt, pct } from "@/lib/format";
@@ -74,6 +75,9 @@ export default function PlayerDetail() {
         <Stat label="CS%" value={next ? pct(next.clean_sheet_prob) : "–"} />
         <Stat label="P(haul)" value={next ? pct(next.p_haul) : "–"} />
       </div>
+
+      {/* Bộ chỉ số đầy đủ: phân phối, phút, VORP, bốn loại rủi ro, độ mới dữ liệu */}
+      <PlayerScorecard playerId={id as string} />
 
       <div className="grid gap-6 lg:grid-cols-2">
         {/* xP horizon chart */}

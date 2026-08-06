@@ -56,6 +56,18 @@ def get_player(player_id: int, db: Session = Depends(get_db)) -> dict:
     return d
 
 
+@router.get("/players/{player_id}/scorecard")
+def get_player_scorecard(player_id: int, gameweek: int | None = None,
+                         db: Session = Depends(get_db)) -> dict:
+    """Bộ chỉ số đầy đủ: phân phối điểm, phút, VORP, bốn loại rủi ro, độ mới dữ liệu."""
+    from app.services.players import player_scorecard
+
+    d = player_scorecard(db, player_id, gameweek)
+    if not d:
+        raise HTTPException(404, "Player not found")
+    return d
+
+
 @router.get("/players/{player_id}/projections")
 def get_player_projections(player_id: int, db: Session = Depends(get_db)) -> dict:
     d = player_detail(db, player_id)

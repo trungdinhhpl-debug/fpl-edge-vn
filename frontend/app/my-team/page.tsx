@@ -7,11 +7,13 @@ import { useT } from "@/lib/i18n";
 import { Card, CardContent, CardHeader, CardTitle, Button, Input, Spinner, ErrorBox, Badge, Stat } from "@/components/ui";
 import { PosTag, StatusDot } from "@/components/fpl";
 import { DeadlineCountdown } from "@/components/deadline-countdown";
+import { TransferVerdict } from "@/components/transfer-verdict";
 import { fmt } from "@/lib/format";
 import { riskBg } from "@/lib/utils";
 
 export default function MyTeamPage() {
   const { t } = useT();
+  const [verdict, setVerdict] = useState<any>(null);
   const [teamId, setTeamId] = useState("");
   const [imported, setImported] = useState<any>(null);
   const [pmap, setPmap] = useState<Record<number, any>>({});
@@ -55,6 +57,18 @@ export default function MyTeamPage() {
     try {
       setAnalysis(await postJSON("/api/team/analyze", { squad_ids: squadIds, bank: imported.bank }));
     } catch (e: any) { setError(String(e.message ?? e)); } finally { setBusy(null); }
+  }
+
+  async function loadVerdict() {
+    if (!squadIds.length) return;
+    try {
+      setVerdict(await postJSON("/api/optimizer/transfer-verdict", {
+        squad_ids: squadIds, bank: imported.bank,
+        free_transfers: imported.free_transfers ?? 1, max_transfers: 1,
+      }));
+    } catch (e: any) {
+      setError(String(e.message ?? e));
+    }
   }
 
   async function optimizeNext() {
@@ -138,7 +152,7 @@ export default function MyTeamPage() {
             </Button>
             <Button
               variant="outline"
-              onClick={optimizeNext}
+              onClick={() => { optimizeNext(); loadVerdict(); }}
               disabled={busy === "next" || squadIds.length !== 15}
               title={squadIds.length !== 15 ? "Cần đủ 15 cầu thủ" : undefined}
             >
@@ -214,6 +228,9 @@ export default function MyTeamPage() {
               </Card>
             </div>
           )}
+
+          {/* Khuyến nghị roll-vs-transfer theo cấu trúc cố định */}
+          {verdict && <TransferVerdict v={verdict} />}
 
           {/* Next GW transfers */}
           {nextGw && (
