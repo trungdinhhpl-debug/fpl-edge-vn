@@ -523,6 +523,23 @@ def sync_championship(db: Session) -> dict:
 
 
 # ----------------------------------------------------------------- full sync --
+def _record_model_version(db: Session) -> dict:
+    """Ghi phiên bản engine hiện hành vào `model_versions`, một dòng cho mỗi phiên bản."""
+    from app.models import ModelVersion
+
+    v = settings.model_version
+    row = db.scalar(
+        select(ModelVersion).where(
+            ModelVersion.version == v, ModelVersion.kind == "xp"
+        )
+    )
+    if row is None:
+        db.add(ModelVersion(version=v, kind="xp", notes="ghi tự động khi đồng bộ"))
+        db.flush()
+        return {"version": v, "recorded": "new"}
+    return {"version": v, "recorded": "existing"}
+
+
 def run_full_sync(db: Session, build_proj: bool = True, detail: bool = False) -> dict:
     result: dict = {"started_at": datetime.now(timezone.utc).isoformat()}
     with FPLClient() as client:
@@ -544,6 +561,12 @@ def run_full_sync(db: Session, build_proj: bool = True, detail: bool = False) ->
             capture_snapshots,
             fill_outcomes,
         )
+
+        # Ghi lại phiên bản engine đang chạy. Bảng `model_versions` tồn tại từ
+        # đầu nhưng chưa ai ghi vào — nghĩa là không có lịch sử để trả lời "dự báo
+        # tháng trước do engine nào tạo ra", trong khi snapshot lại gắn nhãn phiên
+        # bản. Ghi ở đây (idempotent) để hai thứ khớp nhau.
+        result["model_version"] = _record_model_version(db)
 
         result["snapshot"] = capture_snapshots(db)
         result["captain_picks"] = capture_captain_picks(db)

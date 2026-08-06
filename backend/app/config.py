@@ -128,7 +128,17 @@ class Settings(BaseSettings):
     # ---- Modelling ----
     projection_horizon: int = 8            # gameweeks the engine projects ahead
     montecarlo_iterations: int = 10_000
-    model_version: str = "xp-0.3.0"
+    # PHẢI tăng khi engine đổi cách tính, vì `projection_snapshots` và
+    # `captain_picks` gắn nhãn này vào từng dự báo đã đóng băng. Hai bản dự báo do
+    # hai engine khác nhau tạo ra mà mang cùng nhãn thì trang Model Performance
+    # không phân biệt được — tức chính công cụ đo chất lượng mô hình mất tác dụng.
+    #
+    # 0.4.0 (2026-08-06): luật BPS theo mùa + quy đổi BPS mang từ mùa trước; viết
+    #   lại mô hình bonus thành chia quỹ 6 điểm mỗi trận; bảo toàn tổng bàn thắng
+    #   của đội theo λ; khớp Monte Carlo với giải tích ở 5 chỗ (điểm ra sân đủ 60
+    #   phút, sạch lưới, bàn thua, tần suất bonus, mẫu số share); đồng thuận nhà cái
+    #   chuyển sang trung vị + hạ trọng số khi thị trường mỏng.
+    model_version: str = "xp-0.4.0"
 
     @property
     def cors_list(self) -> list[str]:

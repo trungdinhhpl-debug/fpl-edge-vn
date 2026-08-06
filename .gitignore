@@ -30,3 +30,7 @@ _realtest.db
 
 # generated static reports (regenerate with: python -m app.cli report)
 reports/
+
+# ---- local tooling ----
+# launch.json chứa đường dẫn tuyệt đối của máy dev, không dùng chung được
+.claude/

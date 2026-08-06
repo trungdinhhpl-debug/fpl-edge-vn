@@ -25,9 +25,11 @@ services:
         value: "8"
       - key: MONTECARLO_ITERATIONS
         value: "6000"
-      # replace with your Vercel domain after the frontend is deployed
+      # Domain Vercel của frontend. `sync: false` để Render HỎI giá trị khi deploy
+      # thay vì im lặng dùng một placeholder — placeholder sai thì trình duyệt bị
+      # CORS chặn và lỗi hiện ra ở phía frontend, rất khó truy về đây.
       - key: CORS_ORIGINS
-        value: "https://your-app.vercel.app"
+        sync: false
       # optional probability provider
       - key: ODDS_API_KEY
         sync: false
