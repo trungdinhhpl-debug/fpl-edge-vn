@@ -13,24 +13,48 @@ import {
  */
 export default function PerformancePage() {
   const { data, error } = useApi<any>("/api/model/performance");
+  const st = data?.state ?? {};
 
-  if (error) return <ErrorBox error={String(error)} />;
-  if (!data) return <Spinner label="Đang tính chỉ số…" />;
+  // Tiêu đề luôn hiển thị, kể cả khi đang tải hoặc lỗi. Bản đầu return sớm nên
+  // trang chỉ ra một spinner trần không tiêu đề — và khi backend chưa kịp deploy
+  // endpoint thì người dùng chỉ thấy một khung lỗi không rõ của trang nào.
+  const header = (
+    <div>
+      <h1 className="flex items-center gap-2 text-2xl font-bold">
+        <Gauge className="h-6 w-6 text-primary" /> Model Performance
+      </h1>
+      <p className="text-sm text-muted-foreground">
+        Mô hình dự báo tốt đến đâu, đo bằng kết quả đã xảy ra — không phải bằng lời.
+        So với hai baseline: chỉ số <code>form</code> của chính FPL và sức mạnh đội
+        suy từ kèo.
+      </p>
+    </div>
+  );
 
-  const st = data.state ?? {};
+  if (error) {
+    return (
+      <div className="space-y-4">
+        {header}
+        <ErrorBox error={String(error)} />
+        <p className="text-xs text-muted-foreground">
+          Nếu backend vừa được cập nhật, endpoint <code>/api/model/performance</code> có
+          thể chưa sống. Thử lại sau vài phút.
+        </p>
+      </div>
+    );
+  }
+  if (!data) {
+    return (
+      <div className="space-y-4">
+        {header}
+        <Spinner label="Đang tính chỉ số…" />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-4">
-      <div>
-        <h1 className="flex items-center gap-2 text-2xl font-bold">
-          <Gauge className="h-6 w-6 text-primary" /> Model Performance
-        </h1>
-        <p className="text-sm text-muted-foreground">
-          Mô hình dự báo tốt đến đâu, đo bằng kết quả đã xảy ra — không phải bằng lời.
-          So với hai baseline: chỉ số <code>form</code> của chính FPL và sức mạnh đội
-          suy từ kèo.
-        </p>
-      </div>
+      {header}
 
       <div className="flex flex-wrap gap-4 rounded-md border bg-muted/30 px-3 py-2 text-xs">
         <span>
