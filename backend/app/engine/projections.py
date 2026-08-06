@@ -67,6 +67,7 @@ def build_projections(
     mc_iterations: int | None = None,
     market_only: bool = False,
     persist: bool = True,
+    collect_components: dict[tuple[int, int], dict[str, float]] | None = None,
 ) -> dict:
     """Tính dự báo cho `horizon` vòng tới.
 
@@ -200,7 +201,7 @@ def build_projections(
         )
 
     def _xp(p, est, lam_for: float, lam_against: float, team_id: int,
-            bonus_override: float | None):
+            bonus_override: float | None, team_goal_scale: float = 1.0):
         return expected_points(
             element_type=p.element_type,
             minutes_season=p.minutes,
@@ -214,6 +215,7 @@ def build_projections(
             cbi_season=p.clearances_blocks_interceptions or 0.0,
             stats_season=stats_from_season,
             bonus_override=bonus_override,
+            team_goal_scale=team_goal_scale,
             penalties_order=p.penalties_order,
             xmins=est.xmins,
             p_start=est.p_start,
@@ -238,14 +240,28 @@ def build_projections(
         đánh đổi này để tránh phải nhân đôi công thức ở hai chỗ.
         """
         by_fixture: dict[int, list[bonus_mod.BonusEntry]] = defaultdict(list)
+        raw_goals: dict[tuple[int, int], float] = defaultdict(float)
+        sim_xg: dict[tuple[int, int], float] = defaultdict(float)
+        sim_xa: dict[tuple[int, int], float] = defaultdict(float)
+        lam_of: dict[tuple[int, int], float] = {}
         for team_id, fixtures in gw_fx.items():
             for (opp_id, is_home, fixture_id) in fixtures:
                 lam_for, lam_against = ts.expected_goals(team_id, opp_id, is_home)
+                lam_of[(team_id, fixture_id)] = lam_for
                 for p in players_by_team.get(team_id, []):
                     est = _minutes_estimate(p, team_id)
                     if est.xmins <= 0:
                         continue
                     c = _xp(p, est, lam_for, lam_against, team_id, None).components
+                    raw_goals[(team_id, fixture_id)] += c["exp_goals"]
+                    # Mẫu số của share trong Monte Carlo phải là tổng xG của đúng
+                    # những người ĐƯỢC MÔ PHỎNG. Dùng tổng cả đội (kể cả người bị
+                    # loại vì xMins <= 3) thì các share cộng lại nhỏ hơn 1, và phần
+                    # thiếu đó biến thành bàn thắng thất lạc — đo được: tiền đạo chỉ
+                    # nhận 88% mức giải tích dù tổng bàn của đội đã được bảo toàn.
+                    if est.xmins > 3:
+                        sim_xg[(team_id, fixture_id)] += p.expected_goals or 0.0
+                        sim_xa[(team_id, fixture_id)] += p.expected_assists or 0.0
                     by_fixture[fixture_id].append(bonus_mod.BonusEntry(
                         player_id=p.id,
                         expected_bps=bonus_mod.expected_fixture_bps(
@@ -264,13 +280,24 @@ def build_projections(
                 entries, max_bonus=RULES.max_bonus
             ).items():
                 out[(pid, fixture_id)] = val
-        return out
+
+        # Hệ số bảo toàn bàn thắng cho từng (đội, trận). Chặn trong [0.5, 2.0]: một
+        # hệ số ngoài khoảng đó nghĩa là dữ liệu cầu thủ và mô hình sức mạnh đội
+        # đang mâu thuẫn nặng, và ép khớp bằng mọi giá sẽ bóp méo từng cầu thủ hơn
+        # là sửa được gì.
+        scales: dict[tuple[int, int], float] = {}
+        for key, raw in raw_goals.items():
+            lam = lam_of.get(key, 0.0)
+            if raw <= 1e-6 or lam <= 0:
+                continue
+            scales[key] = max(0.5, min(2.0, lam / raw))
+        return out, scales, dict(sim_xg), dict(sim_xa)
 
     for gw in gws:
         gw_fx = fx_by_gw.get(gw, {})
         # baseline chỉ cần xP, không cần phân phối — bỏ Monte Carlo cho nhanh
         run_mc = not market_only
-        bonus_by_player_fixture = _allocate_gw_bonus(gw_fx)
+        bonus_by_player_fixture, goal_scales, sim_xg, sim_xa = _allocate_gw_bonus(gw_fx)
 
         if market_only:
             # Chỉ tính cho trận CÓ kèo. Trận không có kèo thì TeamStrength rơi về
@@ -286,6 +313,7 @@ def build_projections(
                         bd = _xp(
                             p, est, lam_for, lam_against, team.id,
                             bonus_by_player_fixture.get((p.id, fixture_id)),
+                            goal_scales.get((team.id, fixture_id), 1.0),
                         )
                         key = (p.id, gw)
                         baseline_xp[key] = baseline_xp.get(key, 0.0) + bd.xp
@@ -303,12 +331,18 @@ def build_projections(
             for (opp_id, is_home, fixture_id) in team_fx:
                 lam_for, lam_against = ts.expected_goals(team.id, opp_id, is_home)
                 mc_players: list[MCPlayer] = []
+                # tổng xG của riêng nhóm được mô phỏng (xem chú thích ở pre-pass);
+                # rơi về tổng cả đội nếu pre-pass không có số cho trận này
+                denom_xg = sim_xg.get(
+                    (team.id, fixture_id), team_xg_total[team.id]
+                ) or team_xg_total[team.id]
 
                 for p in squad:
                     est = _minutes_estimate(p, team.id)
                     bd = _xp(
                         p, est, lam_for, lam_against, team.id,
                         bonus_by_player_fixture.get((p.id, fixture_id)),
+                        goal_scales.get((team.id, fixture_id), 1.0),
                     )
                     # stash analytic breakdown on the player object for this fixture
                     p._acc = getattr(p, "_acc", None) or _Acc()
@@ -316,12 +350,12 @@ def build_projections(
 
                     if run_mc and est.xmins > 3:
                         share_goal = (
-                            (p.expected_goals or 0) / team_xg_total[team.id]
-                            if team_xg_total[team.id] > 0.1
+                            (p.expected_goals or 0) / denom_xg
+                            if denom_xg > 0.1
                             else 0.0
                         )
                         share_assist = (
-                            (p.expected_assists or 0) / max(team_xg_total[team.id], 0.1)
+                            (p.expected_assists or 0) / max(denom_xg, 0.1)
                         )
                         threshold = (
                             RULES.defcon_threshold_def
@@ -350,7 +384,19 @@ def build_projections(
                         )
 
                 if run_mc and mc_players:
-                    sims = simulate_fixture(mc_players, lam_for, lam_against, iters, rng)
+                    # Chế độ chẩn đoán: gom trung bình từng thành phần của MC để so
+                    # với phân rã giải tích. Phải đi qua CHÍNH pipeline này, vì một
+                    # bản dựng lại bằng tay sẽ có xMins khác (matches_played,
+                    # role_rank, no_pl_history) và hai bên hết so được với nhau.
+                    col: dict | None = {} if collect_components is not None else None
+                    sims = simulate_fixture(
+                        mc_players, lam_for, lam_against, iters, rng, collect=col
+                    )
+                    if col is not None and collect_components is not None:
+                        for pid, c in col.items():
+                            slot = collect_components.setdefault((pid, gw), {})
+                            for k, v in c.items():
+                                slot[k] = slot.get(k, 0.0) + v
                     for pid, arr in sims.items():
                         mc_accum[pid] = mc_accum.get(pid, 0) + arr
 

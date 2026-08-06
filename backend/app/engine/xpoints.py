@@ -62,6 +62,28 @@ def _poisson_ge_k(lmbda: float, k: int) -> float:
     return max(0.0, min(1.0, 1.0 - cdf))
 
 
+def _expected_floor_div(lmbda: float, k: int, max_terms: int = 40) -> float:
+    """E[ floor(X / k) ] với X ~ Poisson(lambda), dùng đẳng thức tổng đuôi.
+
+        E[floor(X/k)] = Σ_{j≥1} P(X ≥ j·k)
+
+    Cần thiết vì FPL đếm theo **mốc trọn**, không theo tỷ lệ: 1 điểm mỗi 3 lần cứu
+    thua, −1 mỗi 2 bàn thua. Lấy `λ/k` cho ra số cao hơn thực tế — hai lần cứu thua
+    được 0 điểm chứ không phải 0.67. Đo được trên GW1: thủ môn bị đội lên 0.297
+    điểm mỗi vòng chỉ vì chỗ này, và Monte Carlo (vốn dùng floor) mới là bên đúng.
+    """
+    lmbda = max(lmbda, 0.0)
+    if lmbda <= 0 or k <= 0:
+        return 0.0
+    total = 0.0
+    for j in range(1, max_terms + 1):
+        p = _poisson_ge_k(lmbda, j * k)
+        total += p
+        if p < 1e-9:
+            break
+    return total
+
+
 def expected_points(
     *,
     element_type: int,
@@ -80,6 +102,9 @@ def expected_points(
     stats_season: str | None = None,
     # Suất bonus đã chia trong nội bộ trận đấu. None = không có ngữ cảnh cả trận.
     bonus_override: float | None = None,
+    # Hệ số chuẩn hoá để tổng bàn/kiến tạo kỳ vọng của CẢ ĐỘI khớp λ của mô hình
+    # sức mạnh đội. 1.0 = không chuẩn hoá (gọi lẻ, không có ngữ cảnh cả đội).
+    team_goal_scale: float = 1.0,
     penalties_order: int | None,
     # from xMins model
     xmins: float,
@@ -120,8 +145,16 @@ def expected_points(
         pen_bump = 1.04
 
     # ---- component EVs ----
-    exp_goals = xg90 * minutes_frac * fixture_adj * pen_bump
-    exp_assists = xa90 * minutes_frac * fixture_adj
+    # Bàn thắng trong một trận là đại lượng BẢO TOÀN: tổng của cả đội phải bằng số
+    # bàn kỳ vọng của đội (λ_team_goals), thứ mà mô hình sức mạnh đội đã ước lượng
+    # từ kèo + xG. Nhân tỷ lệ per-90 của từng người rồi cộng lại KHÔNG tự thoả điều
+    # đó — đo được trên GW1: tổng của Chelsea ra 162% λ, Man City 140%, còn Fulham
+    # chỉ 57%. Nghĩa là tiền đạo đội mạnh bị thổi phồng và đội yếu bị dìm, một cách
+    # hệ thống. `team_goal_scale` do projections.py tính cho từng trận để đóng lại
+    # khoảng đó; Monte Carlo vốn đã bảo toàn (nó chia đúng tổng bàn đã rút), nên đây
+    # cũng là chỗ hai đường tính lệch nhau.
+    exp_goals = xg90 * minutes_frac * fixture_adj * pen_bump * team_goal_scale
+    exp_assists = xa90 * minutes_frac * fixture_adj * team_goal_scale
 
     goal_ev = exp_goals * rules.goal_points.get(pos, 4)
     assist_ev = exp_assists * rules.assist_points
@@ -134,17 +167,23 @@ def expected_points(
     cs_prob = math.exp(-lam_conceded)
     cs_ev = cs_prob * p_60_plus * rules.clean_sheet_points.get(pos, 0)
 
-    # saves (GK): +1 per 3
+    # saves (GK): +1 mỗi 3 lần cứu thua — theo MỐC TRỌN, không theo tỷ lệ.
+    # `exp_saves / 3` cho hai lần cứu thua thành 0.67 điểm, trong khi luật cho 0.
     save_ev = 0.0
     if pos == 1:
         shot_adj = max(0.6, min(1.8, lam_conceded / 1.3))
         exp_saves = saves90 * minutes_frac * shot_adj
-        save_ev = exp_saves / rules.saves_per_point
+        save_ev = _expected_floor_div(exp_saves, rules.saves_per_point)
 
-    # goals conceded penalty (GK/DEF): -1 per 2, requires 60'
+    # goals conceded penalty (GK/DEF): −1 mỗi 2 bàn, cũng theo mốc trọn. Một bàn
+    # thua không mất điểm; `λ/2` thì trừ 0.5 và làm hậu vệ bị phạt oan.
     conceded_ev = 0.0
     if pos in rules.conceded_penalty_positions:
-        conceded_ev = (lam_conceded / 2.0) * rules.points_per_two_conceded * p_60_plus
+        conceded_ev = (
+            _expected_floor_div(lam_conceded, 2)
+            * rules.points_per_two_conceded
+            * p_60_plus
+        )
 
     # defensive contribution (2025/26)
     defcon_ev = 0.0

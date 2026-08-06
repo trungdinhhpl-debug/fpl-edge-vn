@@ -122,6 +122,55 @@ chứ không bịa số. Nghĩa là phần bù cho thủ môn và cầu thủ ha
 Không quy đổi khi vòng 1 đã có trận kết thúc: từ lúc đó tổng cả-mùa là số của mùa
 này, kiếm theo đúng luật đang áp (`services/season_state.stats_season()`).
 
+### 2b-bis. Hai đường tính phải nói cùng một điều
+
+xP được tính **giải tích** (`engine/xpoints.py`) còn phân phối đến từ **Monte
+Carlo** (`engine/montecarlo.py`). Hai đường mô hình cùng một đại lượng, nên trung
+bình phải khớp. Đo được trước khi sửa (GW1, xMins ≥ 20, MC/giải tích): thủ môn 88%,
+hậu vệ 107%, tiền vệ 92%, **tiền đạo 79%**.
+
+Phân rã theo thành phần cho thấy bốn nguyên nhân, và **hai bên sai ở hai chỗ khác
+nhau** — nên không có bên nào "đúng" để lấy làm chuẩn:
+
+| Thành phần | Bên sai | Sai gì |
+|---|---|---|
+| Cứu thua, bàn thua | giải tích | FPL đếm theo **mốc trọn** (1 điểm mỗi 3 lần cứu, −1 mỗi 2 bàn). `λ/k` cho hai lần cứu thành 0.67 điểm, luật cho 0. Dùng `E[floor(X/k)] = Σ P(X ≥ jk)` |
+| Điểm ra sân | Monte Carlo | trao 2 điểm cho mọi người **đá chính**; luật đòi **đủ 60 phút** |
+| Tần suất bonus | Monte Carlo | giả định trung bình rút là 2, thực tế nhỏ hơn; và cái chặn `min(1, ·)` khiến người kỳ vọng bonus cao không đạt tới |
+| Bảo toàn tổng bàn | giải tích | tổng bàn kỳ vọng của cả đội **không khớp λ** của mô hình sức mạnh đội |
+| Mẫu số của share | Monte Carlo | gồm cả cầu thủ **không được mô phỏng**, nên các share cộng lại < 1 |
+
+Hai chỗ đáng nói riêng:
+
+**Bảo toàn tổng bàn.** Bàn thắng trong một trận là đại lượng bảo toàn: tổng của cả
+đội phải bằng λ mà mô hình sức mạnh đội ước lượng từ kèo + xG. Nhân tỷ lệ per-90 của
+từng người rồi cộng lại không tự thoả điều đó — đo trên GW1: **Chelsea 162% λ, Man
+City 140%, Fulham 57%**. Nghĩa là tiền đạo đội mạnh bị thổi phồng và đội yếu bị dìm,
+một cách hệ thống. `projections.py` giờ tính hệ số `λ / Σ` cho từng (đội, trận) và
+truyền vào `expected_points`, chặn trong [0.5, 2.0] — ra ngoài khoảng đó là dữ liệu
+cầu thủ và mô hình đội đang mâu thuẫn nặng, ép khớp bằng mọi giá chỉ bóp méo thêm.
+
+**Mẫu số của share.** `share_goal = xG cầu thủ / Σ xG đội` nhưng Monte Carlo chỉ mô
+phỏng người có xMins > 3. Phần xG của những người bị loại biến thành bàn thắng thất
+lạc: **5.9% toàn giải, tới 21% ở Liverpool**. Giờ mẫu số chỉ gồm nhóm được mô phỏng,
+đúng với ý định vốn có của module (chuyển share của người vắng sang người thay thế).
+
+**Kết quả:** thủ môn 88→**100%**, hậu vệ 107→**103%**, tiền vệ 92→**99%**, tiền đạo
+79→**91%**. Top-20 theo tổng xP 8 vòng giữ **20/20** người.
+
+**Còn lệch ở đâu, và vì sao dừng.** Tiền đạo còn 91%, do hai nguyên nhân đã xác định
+mà **không** phải lỗi: (1) Monte Carlo không cho một cầu thủ tự kiến tạo cho bàn của
+mình, còn giải tích thì có — ở đây MC đúng; (2) hai bên đánh trọng số phân bổ khác
+nhau (giải tích: per-90 đã shrink × số phút; MC: share xG cả mùa trong nhóm ra sân).
+Khép nốt (2) đòi viết lại cách phân bổ bàn thắng ở một trong hai bên, và chỉnh tiếp
+để một con số đẹp hơn là làm vừa mốc, không phải sửa lỗi.
+
+Chế độ chẩn đoán để đo lại: `simulate_fixture(..., collect=dict)` và
+`build_projections(..., collect_components=dict)` trả về trung bình **từng thành
+phần**, đi qua đúng pipeline thật. Bản dựng lại bằng tay sẽ có xMins khác
+(`matches_played`, `role_rank`, `no_pl_history`) và hai bên hết so được với nhau —
+đã dính một lần: chẩn đoán bằng tay báo 97% trong khi pipeline thật là 86%.
+
 ### 2c. Bonus — chia một quỹ cố định, không phải công thức rời (`engine/bonus.py`)
 
 Bonus là chỗ duy nhất trong engine có **luật bảo toàn kiểm tra được**: mỗi trận FPL
