@@ -125,12 +125,17 @@ def model_snapshot(db: Session = Depends(get_db), gameweek: int | None = None) -
 
     Chạy tự động trong mỗi lần đồng bộ; endpoint này để chạy tay khi cần.
     """
-    from app.services.model_performance import capture_snapshots, fill_outcomes
+    from app.services.model_performance import (
+        capture_captain_picks,
+        capture_snapshots,
+        fill_outcomes,
+    )
 
     captured = capture_snapshots(db, gameweek)
+    captains = capture_captain_picks(db, gameweek)
     filled = fill_outcomes(db)
     db.commit()
-    return {"captured": captured, "outcomes": filled}
+    return {"captured": captured, "captain_picks": captains, "outcomes": filled}
 
 
 @router.get("/chips/windows")

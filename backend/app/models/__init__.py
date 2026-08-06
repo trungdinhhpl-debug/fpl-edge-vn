@@ -22,6 +22,7 @@ from app.models.meta import (  # noqa: F401
     UserProfile,
 )
 from app.models.projections import (  # noqa: F401
+    CaptainPick,
     ExpectedMinutes,
     ModelVersion,
     PlayerProjection,
@@ -39,6 +40,7 @@ __all__ = [
     "PlayerGameweekStat",
     "ModelVersion",
     "ExpectedMinutes",
+    "CaptainPick",
     "PlayerProjection",
     "ProjectionSnapshot",
     "ExpertSource",

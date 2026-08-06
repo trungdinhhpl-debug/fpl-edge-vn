@@ -178,6 +178,19 @@ def calibration_error(probs: list[float], outcomes: list[bool],
 
 
 # --------------------------------------------------------------- chụp ảnh ------
+def _log_baseline_failure(exc: Exception) -> None:
+    """Baseline hỏng thì ghi log rồi đi tiếp — không được kéo theo snapshot chính.
+
+    Mất baseline làm mất một cột so sánh; mất snapshot làm mất VĨNH VIỄN khả năng
+    chấm vòng đó. Hai mức thiệt hại khác hẳn nhau nên không gộp chung try/except.
+    """
+    import logging
+
+    logging.getLogger(__name__).warning(
+        "Không tính được baseline kèo: %s — snapshot vẫn được ghi.", exc
+    )
+
+
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -220,6 +233,19 @@ def capture_snapshots(db: Session, gameweek: int | None = None) -> dict:
     if not projs:
         return {"ok": False, "reason": f"Chưa có dự báo cho GW{gameweek}."}
 
+    # Baseline kèo tính NGAY TẠI ĐÂY, cùng lượt với dự báo chính: chụp lệch thời
+    # điểm là so gian lận (một bên biết tin đội hình muộn hơn bên kia).
+    market_xp: dict[tuple[int, int], float] = {}
+    try:
+        from app.engine.projections import build_projections
+
+        market_xp = build_projections(
+            db, horizon=1, market_only=True, persist=False
+        ).get("xp", {})
+    except Exception as exc:      # baseline hỏng không được làm hỏng snapshot chính
+        market_xp = {}
+        _log_baseline_failure(exc)
+
     players = {p.id: p for p in db.scalars(select(Player)).all()}
     existing = {
         s.player_id: s
@@ -251,7 +277,8 @@ def capture_snapshots(db: Session, gameweek: int | None = None) -> dict:
         row.p_haul = pr.p_haul
         row.xmins = pr.xmins
         row.baseline_form = float(p.form) if p and p.form is not None else None
-        # baseline kèo chưa nối — xem `market_baseline_status()`
+        # None khi trận không có kèo — không lấy mô hình nội bộ điền vào chỗ đó
+        row.baseline_market_xp = market_xp.get((pr.player_id, gameweek))
         row.is_locked = past_deadline
         written += 1
         if past_deadline:
@@ -267,6 +294,183 @@ def capture_snapshots(db: Session, gameweek: int | None = None) -> dict:
         "skipped_already_locked": skipped,
         "deadline": deadline.isoformat() if deadline else None,
         "past_deadline": past_deadline,
+    }
+
+
+CAPTAIN_PICKS_PER_LIST = 3
+
+
+def capture_captain_picks(db: Session, gameweek: int | None = None,
+                          top_n: int = CAPTAIN_PICKS_PER_LIST) -> dict:
+    """Đóng băng lựa chọn đội trưởng của cả bốn bảng xếp hạng.
+
+    Trang Đội trưởng tính tại chỗ mỗi lần mở, nên nếu không lưu thì sau vòng đấu
+    không còn biết hệ thống đã khuyên ai. Lưu `top_n` người mỗi bảng để đo được cả
+    "chọn đúng số 1" lẫn "người hay nhất có nằm trong nhóm đầu ta đưa ra".
+    """
+    from app import scoring
+    from app.models import CaptainPick
+    from app.services.captains import captain_ranking
+
+    season = scoring.SEASON
+    if gameweek is None:
+        nxt = db.scalar(select(Gameweek).where(Gameweek.is_next.is_(True)))
+        if nxt is None:
+            nxt = db.scalars(
+                select(Gameweek).where(Gameweek.finished.is_(False))
+                .order_by(Gameweek.id)
+            ).first()
+        if nxt is None:
+            return {"ok": False, "reason": "Không xác định được vòng sắp tới."}
+        gameweek = nxt.id
+
+    gw_row = db.get(Gameweek, gameweek)
+    deadline = _aware(gw_row.deadline_time) if gw_row else None
+    past_deadline = bool(deadline and _now() >= deadline)
+
+    try:
+        board = captain_ranking(db, gameweek, limit=max(top_n, 3))
+    except Exception as exc:
+        _log_baseline_failure(exc)
+        return {"ok": False, "reason": f"Không dựng được bảng đội trưởng: {exc}"}
+
+    existing = {
+        (c.list_kind, c.rank): c
+        for c in db.scalars(
+            select(CaptainPick).where(
+                CaptainPick.season == season, CaptainPick.gameweek == gameweek
+            )
+        ).all()
+    }
+
+    written = skipped = 0
+    for kind, block in (board.get("lists") or {}).items():
+        for c in (block.get("players") or [])[:top_n]:
+            rank = int(c.get("rank") or 0)
+            if rank <= 0:
+                continue
+            row = existing.get((kind, rank))
+            if row is not None and row.is_locked:
+                skipped += 1
+                continue
+            if row is None:
+                row = CaptainPick(
+                    season=season, gameweek=gameweek, list_kind=kind, rank=rank
+                )
+                db.add(row)
+            row.player_id = int(c["id"])
+            row.captain_xp = float(c.get("captain_xp") or 0.0)
+            row.ceiling = float(c.get("ceiling") or 0.0)
+            row.projected_eo = c.get("projected_eo")
+            row.captured_at = _now()
+            row.deadline_time = deadline
+            row.is_locked = past_deadline
+            row.model_version = settings.model_version
+            written += 1
+
+    db.flush()
+    return {
+        "ok": True,
+        "season": season,
+        "gameweek": gameweek,
+        "written": written,
+        "skipped_already_locked": skipped,
+        "lists": sorted((board.get("lists") or {}).keys()),
+        "top_n": top_n,
+        "past_deadline": past_deadline,
+    }
+
+
+def captain_hit_rate(db: Session) -> dict:
+    """Tỷ lệ chọn đúng đội trưởng, tính riêng cho từng bảng xếp hạng.
+
+    Định nghĩa "đúng": lựa chọn số 1 ghi điểm cao nhất trong **toàn bộ cầu thủ mà
+    mô hình dự báo sẽ ra sân** ở vòng đó (xMins ≥ ngưỡng chấm điểm).
+
+    Đây là một cái bar CỐ TÌNH khó, và bản đầu đã định nghĩa sai theo hướng dễ: lấy
+    "cao nhất trong 3 người ta tự lưu", tức chỉ kiểm #1 có hơn #2 và #3 — tự chấm
+    mình, con số sẽ đẹp mà không nói được gì. Không dùng "cao nhất trong đội của
+    bạn" vì đội hình lúc deadline không được lưu; một định nghĩa cần dữ liệu không
+    có sẽ ra một con số không kiểm được.
+
+    Vì bar khó, `hit_rate` sẽ nhỏ và `top_n_hit_rate` (người hay nhất có nằm trong
+    nhóm đầu ta đưa ra) mới là số nên đọc để so giữa các bảng xếp hạng.
+    """
+    from app import scoring
+    from app.models import CaptainPick
+
+    picks = db.scalars(
+        select(CaptainPick).where(CaptainPick.season == scoring.SEASON)
+    ).all()
+    if not picks:
+        return {"n_gameweeks": 0, "by_list": {}, "picks_archived": 0}
+
+    snaps = db.scalars(
+        select(ProjectionSnapshot).where(
+            ProjectionSnapshot.season == scoring.SEASON,
+            ProjectionSnapshot.actual_points.is_not(None),
+        )
+    ).all()
+    actual = {(r.gameweek, r.player_id): float(r.actual_points or 0) for r in snaps}
+    if not actual:
+        return {"n_gameweeks": 0, "by_list": {}, "picks_archived": len(picks)}
+
+    # Mẫu so sánh: TOÀN BỘ cầu thủ mô hình dự báo sẽ ra sân ở vòng đó — không phải
+    # chỉ mấy người ta tự đề xuất.
+    best_by_gw: dict[int, float] = {}
+    pool_size: dict[int, int] = {}
+    for r in snaps:
+        if (r.xmins or 0) < MIN_XMINS_FOR_SCORING:
+            continue
+        pts = float(r.actual_points or 0)
+        best_by_gw[r.gameweek] = max(best_by_gw.get(r.gameweek, pts), pts)
+        pool_size[r.gameweek] = pool_size.get(r.gameweek, 0) + 1
+
+    by_gw: dict[int, list] = {}
+    for p in picks:
+        by_gw.setdefault(p.gameweek, []).append(p)
+
+    out: dict[str, dict] = {}
+    scored_gws: set[int] = set()
+    for gw, rows in by_gw.items():
+        best = best_by_gw.get(gw)
+        if best is None or pool_size.get(gw, 0) < 2:
+            continue
+        scored_gws.add(gw)
+        for kind in {r.list_kind for r in rows}:
+            k = out.setdefault(kind, {"hit": 0, "top_n_hit": 0, "n": 0})
+            k["n"] += 1
+            top1 = next(
+                (r for r in rows if r.list_kind == kind and r.rank == 1), None
+            )
+            if top1 and actual.get((gw, top1.player_id)) == best:
+                k["hit"] += 1
+            group = [
+                actual.get((gw, r.player_id))
+                for r in rows if r.list_kind == kind
+            ]
+            if best in [g for g in group if g is not None]:
+                k["top_n_hit"] += 1
+
+    return {
+        "n_gameweeks": len(scored_gws),
+        "picks_archived": len(picks),
+        "comparison_pool": (
+            f"Cao nhất trong toàn bộ cầu thủ có xMins ≥ {MIN_XMINS_FOR_SCORING} của "
+            f"vòng đó (cỡ mẫu mỗi vòng: "
+            f"{min(pool_size.values()) if pool_size else 0}–"
+            f"{max(pool_size.values()) if pool_size else 0} cầu thủ). Bar cố tình khó: "
+            f"chọn đúng người ghi cao nhất trong vài trăm người là chuyện hiếm, nên "
+            f"đọc `top_n_hit_rate` để so giữa các bảng."
+        ),
+        "by_list": {
+            kind: {
+                "hit_rate": (v["hit"] / v["n"]) if v["n"] else None,
+                "top_n_hit_rate": (v["top_n_hit"] / v["n"]) if v["n"] else None,
+                "n": v["n"],
+            }
+            for kind, v in out.items()
+        },
     }
 
 
@@ -332,26 +536,34 @@ def fill_outcomes(db: Session, gameweek: int | None = None) -> dict:
 
 
 def market_baseline_status() -> dict:
-    """Baseline kèo: nói rõ là CHƯA nối, chứ không để ô trống ngầm.
+    """Baseline kèo: cùng engine, chỉ khác nguồn sức mạnh đội.
 
-    Định nghĩa dự kiến: xP tính lại với sức mạnh đội lấy **hoàn toàn từ kèo**
-    (`market_weight = 1.0`), giữ nguyên phần mô hình cầu thủ. Nhà cái không ra giá
-    cho điểm FPL của từng cầu thủ nên không thể lấy trực tiếp — mọi baseline kèo ở
-    cấp cầu thủ đều phải đi qua một mô hình phân bổ, và đây là cách trung thực nhất
-    để tách riêng phần "sức mạnh đội đến từ đâu".
+    Nhà cái không ra giá cho điểm FPL của từng cầu thủ, nên mọi baseline kèo ở cấp
+    cầu thủ đều phải đi qua một mô hình phân bổ. Cách trung thực nhất là dùng ĐÚNG
+    engine hiện tại và chỉ thay một thứ: sức mạnh đội lấy hoàn toàn từ kèo
+    (`market_weight = 1.0`) thay vì pha với mô hình nội bộ. Nhờ vậy chênh lệch đo
+    được đúng là "sức mạnh đội đến từ đâu", không lẫn khác biệt về cách tính.
 
-    Chưa nối vì cần một lượt chạy engine thứ hai cho mỗi vòng để đóng băng cùng
-    lúc với dự báo chính; chụp lệch thời điểm là so gian lận.
+    Chỉ tính cho trận CÓ kèo. Trận không có kèo thì engine rơi về mô hình nội bộ,
+    và một baseline như thế thật ra là chính mô hình đội lốt.
     """
     return {
-        "wired": False,
+        "wired": True,
         "definition": (
-            "xP với sức mạnh đội lấy hoàn toàn từ kèo (market_weight = 1.0), "
-            "phần mô hình cầu thủ giữ nguyên."
+            "Cùng engine, chỉ khác một chỗ: sức mạnh đội lấy hoàn toàn từ kèo "
+            "(market_weight = 1.0, không hạ trọng số theo độ mỏng thị trường). "
+            "Chỉ tính cho trận có kèo; trận không có kèo để trống."
         ),
-        "why_not_yet": (
-            "Cần chạy engine lần hai mỗi vòng để đóng băng baseline cùng thời điểm "
-            "với dự báo chính. Chụp lệch thời điểm là so gian lận."
+        "why_not_yet": "",
+        # Cảnh báo phải đọc TRƯỚC khi so hai cột, không phải sau.
+        "caveat": (
+            f"Đây là baseline YẾU về mặt phân biệt: mô hình chính đã pha "
+            f"{settings.odds_market_weight:.0%} kèo rồi, nên chuyển sang 100% kèo chỉ "
+            f"dịch phần {1 - settings.odds_market_weight:.0%} còn lại. Đo trên GW1: "
+            f"chênh lệch xP trung bình 0.074 điểm, lớn nhất 0.675. Hai cột gần nhau "
+            f"KHÔNG có nghĩa 'mô hình chỉ ngang nhà cái' — nghĩa là mô hình đã CHỨA "
+            f"nhà cái. Muốn tách hẳn thì phải đặt odds_market_weight = 0 cho cột mô "
+            f"hình, và đó là một câu hỏi khác."
         ),
     }
 
@@ -370,6 +582,9 @@ class _Scored:
     hauled: list[bool] = field(default_factory=list)
     n_form: int = 0
     gameweeks: set[int] = field(default_factory=set)
+    # baseline kèo chỉ có ở trận có kèo, nên nó có tập mẫu RIÊNG — ghép cặp
+    # (dự báo, kết quả) tại chỗ thay vì căn theo chỉ số của danh sách chính
+    market_pairs: list[tuple[float, float]] = field(default_factory=list)
 
 
 def _collect(db: Session) -> _Scored:
@@ -398,6 +613,8 @@ def _collect(db: Session) -> _Scored:
             out.n_form += 1
         else:
             out.form.append(float("nan"))
+        if r.baseline_market_xp is not None:
+            out.market_pairs.append((r.baseline_market_xp, actual))
     return out
 
 
@@ -450,7 +667,23 @@ def player_metrics(db: Session) -> dict:
         )
 
     mk = market_baseline_status()
-    mk_unlock = mk["why_not_yet"]
+    mkt_pred = [x[0] for x in s.market_pairs]
+    mkt_act = [x[1] for x in s.market_pairs]
+    mk_degenerate = _is_degenerate(mkt_pred) if mkt_pred else True
+    mk_ready = len(mkt_pred) >= MIN_SAMPLE and not mk_degenerate
+    if not mkt_pred:
+        mk_unlock = (
+            "Chưa có trận nào có kèo trong số đã chấm. Baseline này chỉ tính cho "
+            "trận CÓ kèo — trận không có kèo thì engine rơi về mô hình nội bộ, và "
+            "một baseline như vậy thật ra là chính mô hình đội lốt."
+        )
+    elif mk_degenerate:
+        mk_unlock = (
+            f"Baseline kèo không có phương sai trên {len(mkt_pred)} quan sát — kiểm tra "
+            f"lại dữ liệu kèo."
+        )
+    else:
+        mk_unlock = _need(len(mkt_pred), "Baseline kèo được đóng băng cùng lúc với dự báo.")
 
     def model(label: str, fn, better: str = "high", note: str = "") -> Metric:
         if not ready:
@@ -472,8 +705,18 @@ def player_metrics(db: Session) -> dict:
                           better=better)
         return Metric(label=label, value=v, n=len(fp), status="ok", better=better)
 
-    def base_market(label: str, better: str = "high") -> Metric:
-        return Metric(label=label, status="no_data", unlock=mk_unlock, better=better)
+    def base_market(label: str, fn=None, better: str = "high") -> Metric:
+        if fn is None or not mk_ready:
+            return Metric(label=label, status="no_data", unlock=mk_unlock,
+                          better=better)
+        v = fn()
+        if v is None:
+            return Metric(label=label, status="no_data", unlock=mk_unlock,
+                          better=better)
+        return Metric(
+            label=label, value=v, n=len(mkt_pred), status="ok", better=better,
+            note="Chỉ gồm trận có kèo.",
+        )
 
     ece, ece_detail = (
         calibration_error(s.p_haul, s.hauled) if ready else (None, [])
@@ -488,14 +731,18 @@ def player_metrics(db: Session) -> dict:
             ),
             "model": model("Spearman", lambda: spearman(s.xp, s.actual)).as_dict(),
             "baseline_form": base_form("Spearman", lambda: spearman(fp, fa)).as_dict(),
-            "baseline_market": base_market("Spearman").as_dict(),
+            "baseline_market": base_market(
+                "Spearman", lambda: spearman(mkt_pred, mkt_act)
+            ).as_dict(),
         },
         {
             "metric": "MAE xP",
             "explain": "Sai số tuyệt đối trung bình giữa xP và điểm thật, đơn vị điểm.",
             "model": model("MAE", lambda: mae(s.xp, s.actual), "low").as_dict(),
             "baseline_form": base_form("MAE", lambda: mae(fp, fa), "low").as_dict(),
-            "baseline_market": base_market("MAE", "low").as_dict(),
+            "baseline_market": base_market(
+                "MAE", lambda: mae(mkt_pred, mkt_act), "low"
+            ).as_dict(),
         },
         {
             "metric": "RMSE",
@@ -505,7 +752,9 @@ def player_metrics(db: Session) -> dict:
             ),
             "model": model("RMSE", lambda: rmse(s.xp, s.actual), "low").as_dict(),
             "baseline_form": base_form("RMSE", lambda: rmse(fp, fa), "low").as_dict(),
-            "baseline_market": base_market("RMSE", "low").as_dict(),
+            "baseline_market": base_market(
+                "RMSE", lambda: rmse(mkt_pred, mkt_act), "low"
+            ).as_dict(),
         },
         {
             "metric": "Top-10 precision",
@@ -519,7 +768,9 @@ def player_metrics(db: Session) -> dict:
             "baseline_form": base_form(
                 "Top-10", lambda: top_k_precision(fp, fa, 10)
             ).as_dict(),
-            "baseline_market": base_market("Top-10").as_dict(),
+            "baseline_market": base_market(
+                "Top-10", lambda: top_k_precision(mkt_pred, mkt_act, 10)
+            ).as_dict(),
         },
         {
             "metric": "Brier score P(start)",
@@ -587,10 +838,39 @@ def player_metrics(db: Session) -> dict:
     }
 
 
+def _captain_metric(cap: dict) -> dict:
+    """Ô hit-rate đội trưởng: lấy bảng EV làm số chính, kèm lý do nếu chưa có."""
+    ev = (cap.get("by_list") or {}).get("ev")
+    archived = cap.get("picks_archived", 0)
+    if ev and ev.get("n") and ev.get("hit_rate") is not None:
+        return Metric(
+            label="Hit rate",
+            value=ev["hit_rate"],
+            n=ev["n"],
+            status="ok",
+            note=(
+                f"Bảng EV. Người hay nhất nằm trong nhóm đầu: "
+                f"{ev['top_n_hit_rate']:.0%}."
+                if ev.get("top_n_hit_rate") is not None else "Bảng EV."
+            ),
+        ).as_dict()
+    if archived == 0:
+        why = (
+            "Chưa lưu được lựa chọn đội trưởng nào. Việc lưu chạy trong mỗi lần đồng "
+            "bộ — nếu vẫn trống thì bảng đội trưởng chưa dựng được cho vòng tới."
+        )
+    else:
+        why = (
+            f"Đã lưu {archived} lựa chọn nhưng chưa vòng nào có kết quả để chấm."
+        )
+    return Metric(label="Hit rate", status="no_data", unlock=why).as_dict()
+
+
 def decision_metrics(db: Session) -> dict:
     """Sáu chỉ số chất lượng QUYẾT ĐỊNH — cần khuyến nghị đã lưu + kết quả thật."""
     from app.models import OptimizationRun
 
+    cap = captain_hit_rate(db)
     runs = db.scalars(select(OptimizationRun)).all()
     by_kind: dict[str, int] = {}
     for r in runs:
@@ -646,18 +926,17 @@ def decision_metrics(db: Session) -> dict:
         {
             "metric": "Captain top pick hit rate",
             "explain": (
-                "Bao nhiêu phần trăm số vòng mà đội trưởng được đề xuất là người ghi "
-                "điểm cao nhất trong đội."
+                "Bao nhiêu phần trăm số vòng mà lựa chọn đội trưởng số 1 là người ghi "
+                "điểm cao nhất TRONG NHÓM ỨNG VIÊN đã xét. Không dùng 'cao nhất trong "
+                "đội của bạn' vì đội hình lúc deadline không được lưu — một định nghĩa "
+                "cần dữ liệu không có sẽ chỉ ra một con số không kiểm được."
             ),
-            "result": Metric(
-                label="Hit rate",
-                status="no_data",
-                unlock=(
-                    "Khuyến nghị đội trưởng hiện KHÔNG được lưu lại — trang Đội trưởng "
-                    "tính tại chỗ mỗi lần mở. Cần lưu lựa chọn trước deadline mới chấm "
-                    "được; đây là việc còn thiếu ở phía hệ thống, không phải chờ dữ liệu."
-                ),
-            ).as_dict(),
+            "result": _captain_metric(cap),
+            "by_list": cap.get("by_list", {}),
+            "note": (
+                "Lưu cả bốn bảng (EV / An toàn / Ceiling / Đuổi hạng) nên khi có dữ "
+                "liệu sẽ so được chiến lược nào thắng, thay vì chỉ một con số gộp."
+            ),
         },
         {
             "metric": "Điểm Free Hit tăng thêm",
@@ -700,6 +979,8 @@ def decision_metrics(db: Session) -> dict:
         "rows": rows,
         "runs_archived": by_kind,
         "gameweeks_finished": n_finished,
+        "captain_picks_archived": cap.get("picks_archived", 0),
+        "captain_pool": cap.get("comparison_pool", ""),
     }
 
 

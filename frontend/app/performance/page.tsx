@@ -187,6 +187,28 @@ export default function PerformancePage() {
                       <div className="mt-0.5 max-w-lg text-xs text-muted-foreground">
                         {row.explain}
                       </div>
+                      {row.note && (
+                        <div className="mt-1 max-w-lg text-xs text-muted-foreground">
+                          {row.note}
+                        </div>
+                      )}
+                      {/* Hit-rate của cả bốn bảng: câu đáng hỏi là chiến lược nào
+                          thắng, không phải một con số gộp. */}
+                      {row.by_list && Object.keys(row.by_list).length > 0 && (
+                        <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs">
+                          {Object.entries(row.by_list).map(([kind, v]: any) => (
+                            <span key={kind} className="text-muted-foreground">
+                              {LIST_LABEL[kind] ?? kind}:{" "}
+                              <b className="tabular-nums text-foreground">
+                                {v.hit_rate === null ? "—" : pct(v.hit_rate)}
+                              </b>
+                              {v.top_n_hit_rate !== null && (
+                                <> · nhóm đầu {pct(v.top_n_hit_rate)}</>
+                              )}
+                            </span>
+                          ))}
+                        </div>
+                      )}
                     </td>
                     <Cell c={row.result} />
                   </tr>
@@ -206,11 +228,23 @@ export default function PerformancePage() {
             <p key={i}>• {s}</p>
           ))}
           {data.player_forecasting?.baseline_market && (
+            <>
+              <p>
+                • <b>Baseline bookmaker</b> —{" "}
+                {data.player_forecasting.baseline_market.wired
+                  ? data.player_forecasting.baseline_market.definition
+                  : `chưa nối. ${data.player_forecasting.baseline_market.why_not_yet}`}
+              </p>
+              {data.player_forecasting.baseline_market.caveat && (
+                <p className="rounded-md bg-caution/10 px-2.5 py-2 text-caution">
+                  ⚠ {data.player_forecasting.baseline_market.caveat}
+                </p>
+              )}
+            </>
+          )}
+          {data.decisions?.captain_pool && (
             <p>
-              • <b>Baseline bookmaker</b> —{" "}
-              {data.player_forecasting.baseline_market.wired
-                ? data.player_forecasting.baseline_market.definition
-                : `chưa nối. ${data.player_forecasting.baseline_market.why_not_yet}`}
+              • <b>Mẫu so sánh đội trưởng</b> — {data.decisions.captain_pool}
             </p>
           )}
         </CardContent>
@@ -218,6 +252,14 @@ export default function PerformancePage() {
     </div>
   );
 }
+
+/** Tên bốn bảng xếp hạng đội trưởng, khớp `list_kind` ở backend. */
+const LIST_LABEL: Record<string, string> = {
+  ev: "EV",
+  safe: "An toàn",
+  ceiling: "Ceiling",
+  chase: "Đuổi hạng",
+};
 
 function pct(x: number | null) {
   return x === null || x === undefined ? "—" : `${(x * 100).toFixed(1)}%`;

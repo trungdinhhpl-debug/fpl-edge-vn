@@ -65,7 +65,21 @@ def build_projections(
     db: Session,
     horizon: int | None = None,
     mc_iterations: int | None = None,
+    market_only: bool = False,
+    persist: bool = True,
 ) -> dict:
+    """Tính dự báo cho `horizon` vòng tới.
+
+    `market_only=True` + `persist=False` cho ra **baseline kèo**: đúng engine này,
+    chỉ khác một chỗ duy nhất — sức mạnh đội lấy **hoàn toàn từ kèo** thay vì pha
+    với mô hình nội bộ. Dùng chung toàn bộ phần còn lại (xMins, chia quỹ bonus,
+    luật điểm) là điều kiện để phép so có nghĩa: nếu baseline chạy trên một đường
+    tính khác thì chênh lệch đo được sẽ lẫn cả sự khác nhau về cách tính, chứ không
+    còn là "sức mạnh đội đến từ đâu".
+
+    Ở chế độ này Monte Carlo bị bỏ (baseline chỉ cần xP) và không ghi gì vào DB;
+    hàm trả về `{"xp": {(player_id, gameweek): xp}}`.
+    """
     # luật mùa hiện tại được nạp từ DB (ingestion lưu từ FPL game_config)
     from app.scoring import load_rules
 
@@ -85,12 +99,16 @@ def build_projections(
     ts = TeamStrength(
         teams, players, finished,
         market=market,
-        market_weight=settings.odds_market_weight,
-        market_support=load_market_support(db),
-        full_support_books=settings.odds_full_support_books,
+        # baseline kèo: tin thị trường tuyệt đối, và KHÔNG hạ trọng số theo độ mỏng
+        # (full_support_books=1 làm min(1, n/1) luôn bằng 1) — hạ trọng số là kéo
+        # baseline về phía mô hình, tức làm nó bớt là baseline kèo.
+        market_weight=1.0 if market_only else settings.odds_market_weight,
+        market_support=None if market_only else load_market_support(db),
+        full_support_books=1 if market_only else settings.odds_full_support_books,
         promoted=load_promoted_map(db),
         promoted_damping=settings.championship_damping,
     )
+    baseline_xp: dict[tuple[int, int], float] = {}
 
     # matches played per team
     matches_played: dict[int, int] = defaultdict(int)
@@ -129,9 +147,10 @@ def build_projections(
     start_gw = get_planning_start_gw(db)
     gws = [gw for gw in range(start_gw, start_gw + horizon) if gw <= 38]
 
-    # wipe & rebuild projections for this horizon
-    db.execute(delete(PlayerProjection).where(PlayerProjection.gameweek.in_(gws)))
-    db.execute(delete(ExpectedMinutes).where(ExpectedMinutes.gameweek.in_(gws)))
+    # wipe & rebuild projections for this horizon (baseline không đụng vào DB)
+    if persist:
+        db.execute(delete(PlayerProjection).where(PlayerProjection.gameweek.in_(gws)))
+        db.execute(delete(ExpectedMinutes).where(ExpectedMinutes.gameweek.in_(gws)))
 
     players_by_team: dict[int, list[Player]] = defaultdict(list)
     for p in players:
@@ -249,8 +268,28 @@ def build_projections(
 
     for gw in gws:
         gw_fx = fx_by_gw.get(gw, {})
-        run_mc = True  # run MC across the whole horizon (background job)
+        # baseline chỉ cần xP, không cần phân phối — bỏ Monte Carlo cho nhanh
+        run_mc = not market_only
         bonus_by_player_fixture = _allocate_gw_bonus(gw_fx)
+
+        if market_only:
+            # Chỉ tính cho trận CÓ kèo. Trận không có kèo thì TeamStrength rơi về
+            # mô hình nội bộ, và một "baseline kèo" như vậy thật ra là chính mô
+            # hình đội lốt — so với nó là tự so với mình.
+            for team in teams:
+                for (opp_id, is_home, fixture_id) in gw_fx.get(team.id, []):
+                    if not ts.has_market(team.id, opp_id, is_home):
+                        continue
+                    lam_for, lam_against = ts.expected_goals(team.id, opp_id, is_home)
+                    for p in players_by_team.get(team.id, []):
+                        est = _minutes_estimate(p, team.id)
+                        bd = _xp(
+                            p, est, lam_for, lam_against, team.id,
+                            bonus_by_player_fixture.get((p.id, fixture_id)),
+                        )
+                        key = (p.id, gw)
+                        baseline_xp[key] = baseline_xp.get(key, 0.0) + bd.xp
+            continue
 
         # ---- per-team MC draws reused across that team's players ----
         for team in teams:
@@ -380,7 +419,12 @@ def build_projections(
                 if hasattr(p, "_acc"):
                     delattr(p, "_acc")
 
-    db.commit()
+    if market_only:
+        # không commit: chế độ baseline không được để lại dấu vết nào trong DB
+        return {"gameweeks": gws, "market_only": True, "xp": baseline_xp,
+                "players_covered": len({pid for pid, _ in baseline_xp})}
+    if persist:
+        db.commit()
     return {"gameweeks": gws, "projections_written": n_written, "mc_iterations": iters}
 
 

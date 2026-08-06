@@ -85,6 +85,49 @@ class ProjectionSnapshot(Base):
     )
 
 
+class CaptainPick(Base):
+    """Đội trưởng được đề xuất, đóng băng trước deadline.
+
+    Trang Đội trưởng tính bốn bảng xếp hạng **tại chỗ** mỗi lần mở, không lưu gì.
+    Nghĩa là sau vòng đấu không còn biết hệ thống đã khuyên ai, nên không chấm được
+    `Captain top pick hit rate`. Bảng này lưu lại lựa chọn số 1..N của từng bảng.
+
+    Lưu cả bốn bảng (`ev`, `safe`, `ceiling`, `chase`) chứ không chỉ một: khi có dữ
+    liệu, so hit-rate giữa chúng sẽ trả lời được câu hỏi thật sự đáng hỏi — chiến
+    lược nào thắng — thay vì chỉ nói "hệ thống đúng bao nhiêu phần trăm".
+
+    Cùng cơ chế khoá như `ProjectionSnapshot`: sau deadline không sửa nữa.
+    """
+
+    __tablename__ = "captain_picks"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    season: Mapped[str] = mapped_column(String(16), index=True)
+    gameweek: Mapped[int] = mapped_column(Integer, index=True)
+    # ev | safe | ceiling | chase — tên bảng xếp hạng trong services/captains.py
+    list_kind: Mapped[str] = mapped_column(String(16), index=True)
+    rank: Mapped[int] = mapped_column(Integer)            # 1 = lựa chọn số một
+    player_id: Mapped[int] = mapped_column(ForeignKey("players.id"), index=True)
+
+    captain_xp: Mapped[float] = mapped_column(Float, default=0.0)
+    ceiling: Mapped[float] = mapped_column(Float, default=0.0)
+    projected_eo: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    captured_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    deadline_time: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    is_locked: Mapped[bool] = mapped_column(Boolean, default=False)
+    model_version: Mapped[str] = mapped_column(String(32))
+
+    __table_args__ = (
+        UniqueConstraint(
+            "season", "gameweek", "list_kind", "rank", name="uq_captain_pick_slot"
+        ),
+    )
+
+
 class ModelVersion(Base):
     __tablename__ = "model_versions"
     id: Mapped[int] = mapped_column(primary_key=True)

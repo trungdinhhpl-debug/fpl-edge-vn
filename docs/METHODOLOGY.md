@@ -564,10 +564,48 @@ cho mọi cầu thủ. Nên cột baseline form là hằng số trước vòng 1
 nghĩa được, còn MAE/RMSE vẫn ra số nhưng chỉ đang đo điểm trung bình của giải. Trang
 để trống cột đó kèm đúng lý do, thay vì quy sang "chưa đủ mẫu".
 
-**Chưa nối:** baseline kèo ở cấp cầu thủ (cần chạy engine lượt hai mỗi vòng để đóng
-băng cùng thời điểm — chụp lệch thời điểm là so gian lận), và bốn trong sáu chỉ số
-quyết định cần lưu khuyến nghị trước deadline (đội trưởng và thứ tự ghế dự bị hiện
-tính tại chỗ, không lưu). Trang nói rõ từng cái thiếu gì.
+### Baseline kèo
+
+Nhà cái không ra giá cho điểm FPL của từng cầu thủ, nên mọi baseline kèo ở cấp cầu
+thủ đều phải đi qua một mô hình phân bổ. Cách trung thực nhất là dùng **đúng engine
+hiện tại** và chỉ thay một thứ: sức mạnh đội lấy hoàn toàn từ kèo
+(`market_weight = 1.0`, không hạ trọng số theo độ mỏng thị trường). Nhờ vậy chênh
+lệch đo được đúng là "sức mạnh đội đến từ đâu", không lẫn khác biệt về cách tính.
+Cùng xMins, cùng cách chia quỹ bonus, cùng luật điểm.
+
+Chỉ tính cho trận **có kèo**. Trận không có kèo thì engine rơi về mô hình nội bộ, và
+một "baseline kèo" như vậy thật ra là chính mô hình đội lốt — so với nó là tự so với
+mình. Đã kiểm chứng: dữ liệu hiện chỉ có kèo cho GW1, và baseline chỉ được tính cho
+đúng GW1.
+
+Baseline được đóng băng **cùng lượt** với dự báo chính (`build_projections` chạy thêm
+một lượt ở chế độ `market_only=True, persist=False`, không ghi gì vào DB). Chụp lệch
+thời điểm là so gian lận: một bên sẽ biết tin đội hình muộn hơn bên kia.
+
+**Đây là baseline yếu về mặt phân biệt, và trang nói thẳng điều đó.** Mô hình chính
+đã pha 70% kèo, nên chuyển sang 100% kèo chỉ dịch phần 30% còn lại: đo trên GW1,
+chênh lệch xP trung bình **0.074** điểm, lớn nhất 0.675. Hai cột gần nhau **không**
+có nghĩa "mô hình chỉ ngang nhà cái" — nghĩa là mô hình **đã chứa** nhà cái.
+
+### Lưu khuyến nghị đội trưởng
+
+Trang Đội trưởng tính bốn bảng xếp hạng tại chỗ mỗi lần mở, nên trước đây sau vòng
+đấu không còn biết hệ thống đã khuyên ai. Bảng `captain_picks` lưu 3 lựa chọn đầu
+của **cả bốn bảng** (EV / An toàn / Ceiling / Đuổi hạng), cùng cơ chế khoá sau
+deadline như snapshot. Lưu cả bốn để trả lời được câu đáng hỏi — *chiến lược nào
+thắng* — thay vì một con số gộp.
+
+Định nghĩa "đúng": lựa chọn số 1 ghi điểm cao nhất trong **toàn bộ cầu thủ mô hình
+dự báo sẽ ra sân** ở vòng đó (xMins ≥ 20). Đây là bar cố tình khó. Bản đầu định
+nghĩa sai theo hướng dễ — "cao nhất trong 3 người ta tự lưu", tức chỉ kiểm #1 có hơn
+#2 và #3, là tự chấm mình — nên có test khoá lại. Không dùng "cao nhất trong đội của
+bạn" vì đội hình lúc deadline không được lưu. Vì bar khó, `top_n_hit_rate` (người
+hay nhất có nằm trong nhóm đầu ta đưa ra) mới là số nên đọc để so giữa các bảng.
+
+**Còn chưa nối:** ba trong sáu chỉ số quyết định cần khuyến nghị đã lưu mà chỉ sinh
+ra khi người dùng bấm chạy (`next_gw`, `free_hit`, `wildcard` — đã lưu sẵn vào
+`optimization_runs`), và `Bench order points gained` cần thêm dữ liệu autosub thật.
+Trang nói rõ từng cái thiếu gì.
 
 ## 7. Giới hạn đã biết
 

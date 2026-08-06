@@ -271,3 +271,185 @@ def test_full_payload_declares_how_it_works(db):
     # phải nói rõ vì sao cần bảng snapshot, đó là điều kiện nền của cả trang
     joined = " ".join(r["how_it_works"]).lower()
     assert "snapshot" in joined or "đóng băng" in joined
+
+
+# ------------------------------------------------- baseline kèo & đội trưởng ----
+def test_market_baseline_is_the_same_engine_with_only_team_strength_swapped(db):
+    """Baseline kèo phải KHÁC dự báo chính, và không được ghi gì vào DB.
+
+    Nếu nó giống hệt thì cờ `market_only` không có tác dụng gì; nếu nó ghi vào
+    `player_projections` thì baseline vừa làm bẩn chính dữ liệu nó đi đo.
+    """
+    from sqlalchemy import func
+
+    from app.engine.projections import build_projections
+    from app.models import PlayerProjection
+
+    before = db.scalar(select(func.count()).select_from(PlayerProjection))
+    cutoffs_before = db.scalar(select(func.max(PlayerProjection.data_cutoff)))
+
+    res = build_projections(db, horizon=1, market_only=True, persist=False)
+    assert res.get("market_only") is True
+    assert "xp" in res
+
+    # không đụng vào dữ liệu chính
+    assert db.scalar(select(func.count()).select_from(PlayerProjection)) == before
+    assert db.scalar(select(func.max(PlayerProjection.data_cutoff))) == cutoffs_before
+
+    if not res["xp"]:
+        pytest.skip("bộ dữ liệu không có kèo nên baseline rỗng — đúng theo thiết kế")
+
+    # phải khác dự báo chính ở ít nhất vài cầu thủ
+    main = {
+        (r.player_id, r.gameweek): r.xp
+        for r in db.scalars(select(PlayerProjection)).all()
+    }
+    diffs = [
+        abs(v - main[k]) for k, v in res["xp"].items() if k in main
+    ]
+    assert diffs, "không ghép được cặp nào để so"
+    assert max(diffs) > 1e-9, "market_only không đổi gì — cờ vô tác dụng"
+
+
+def test_market_baseline_skips_fixtures_without_odds(db):
+    """Trận không có kèo phải để TRỐNG, không được lấy mô hình nội bộ điền vào.
+
+    Nếu điền, 'baseline kèo' thật ra là chính mô hình đội lốt, và phép so trở thành
+    so với chính mình.
+    """
+    from app.engine.projections import build_projections
+    from app.models import MarketOdds
+
+    gws_with_odds = {o.gameweek for o in db.scalars(select(MarketOdds)).all()}
+    res = build_projections(db, horizon=8, market_only=True, persist=False)
+    gws_computed = {gw for _, gw in res["xp"]}
+
+    assert gws_computed <= gws_with_odds, (
+        f"tính baseline cho vòng không có kèo: {gws_computed - gws_with_odds}"
+    )
+
+
+def test_market_baseline_declares_that_it_is_a_weak_discriminator():
+    """Cảnh báo phải có sẵn trong payload, không để người đọc tự suy ra."""
+    from app.services.model_performance import market_baseline_status
+
+    st = market_baseline_status()
+    assert st["wired"] is True
+    assert st["definition"]
+    assert st["caveat"], "thiếu cảnh báo về việc mô hình đã chứa kèo"
+    assert "chứa" in st["caveat"].lower() or "đã pha" in st["caveat"].lower()
+
+
+def test_captain_picks_archived_for_every_list_and_locked_after_deadline(db):
+    """Lưu cả bốn bảng, và sau deadline thì khoá — cùng cơ chế với snapshot."""
+    from app import scoring
+    from app.models import CaptainPick, Gameweek, PlayerProjection
+    from app.services.model_performance import capture_captain_picks
+
+    gw = db.scalar(select(PlayerProjection.gameweek).order_by(PlayerProjection.gameweek))
+    row = db.get(Gameweek, gw)
+    original = row.deadline_time
+    try:
+        row.deadline_time = datetime.now(timezone.utc) + timedelta(days=3)
+        db.flush()
+
+        r = capture_captain_picks(db, gw)
+        if not r.get("ok"):
+            pytest.skip(f"không dựng được bảng đội trưởng: {r.get('reason')}")
+        assert set(r["lists"]) == {"ev", "safe", "ceiling", "chase"}
+        assert r["written"] > 0 and r["past_deadline"] is False
+
+        picks = db.scalars(
+            select(CaptainPick).where(
+                CaptainPick.season == scoring.SEASON, CaptainPick.gameweek == gw
+            )
+        ).all()
+        assert {p.list_kind for p in picks} == {"ev", "safe", "ceiling", "chase"}
+        # mỗi bảng phải có một lựa chọn số 1
+        for kind in ("ev", "safe", "ceiling", "chase"):
+            assert any(p.list_kind == kind and p.rank == 1 for p in picks)
+
+        top_ev = next(p for p in picks if p.list_kind == "ev" and p.rank == 1)
+        frozen_player = top_ev.player_id
+
+        # sau deadline: khoá, và lượt chụp sau không được đổi lựa chọn đã lưu
+        row.deadline_time = datetime.now(timezone.utc) - timedelta(hours=1)
+        db.flush()
+        capture_captain_picks(db, gw)
+        again = capture_captain_picks(db, gw)
+        assert again["written"] == 0
+        assert again["skipped_already_locked"] > 0
+
+        still = db.scalar(
+            select(CaptainPick).where(
+                CaptainPick.season == scoring.SEASON,
+                CaptainPick.gameweek == gw,
+                CaptainPick.list_kind == "ev",
+                CaptainPick.rank == 1,
+            )
+        )
+        assert still.player_id == frozen_player
+    finally:
+        row.deadline_time = original
+        db.flush()
+        db.rollback()
+
+
+def test_captain_hit_rate_computes_per_list_when_outcomes_exist(db):
+    """Chấm được từng bảng riêng, và định nghĩa 'đúng' là so trong nhóm ứng viên."""
+    from app import scoring
+    from app.models import CaptainPick, Gameweek, PlayerProjection, ProjectionSnapshot
+    from app.services.model_performance import (
+        capture_captain_picks,
+        capture_snapshots,
+        captain_hit_rate,
+    )
+
+    gw = db.scalar(select(PlayerProjection.gameweek).order_by(PlayerProjection.gameweek))
+    row = db.get(Gameweek, gw)
+    original = row.deadline_time
+    try:
+        row.deadline_time = datetime.now(timezone.utc) + timedelta(days=3)
+        db.flush()
+        capture_snapshots(db, gw)
+        r = capture_captain_picks(db, gw)
+        if not r.get("ok"):
+            pytest.skip("không dựng được bảng đội trưởng")
+
+        picks = db.scalars(
+            select(CaptainPick).where(CaptainPick.gameweek == gw)
+        ).all()
+        ev_top = next(p for p in picks if p.list_kind == "ev" and p.rank == 1)
+
+        # cho lựa chọn số 1 của bảng EV ghi điểm cao nhất -> hit_rate phải là 1.0
+        for s in db.scalars(
+            select(ProjectionSnapshot).where(ProjectionSnapshot.gameweek == gw)
+        ).all():
+            s.actual_points = 20 if s.player_id == ev_top.player_id else 1
+            s.actual_started = True
+        db.flush()
+
+        hr = captain_hit_rate(db)
+        assert hr["n_gameweeks"] >= 1
+        assert hr["by_list"]["ev"]["hit_rate"] == pytest.approx(1.0)
+        assert hr["by_list"]["ev"]["top_n_hit_rate"] == pytest.approx(1.0)
+
+        # giờ cho một người KHÔNG được đề xuất ghi cao nhất -> EV phải trượt
+        # phải chọn người NẰM TRONG mẫu so sánh (xMins ≥ ngưỡng), nếu không họ bị
+        # loại khỏi phép tính và test sẽ không chạm được nhánh "trượt"
+        others = [
+            s for s in db.scalars(
+                select(ProjectionSnapshot).where(ProjectionSnapshot.gameweek == gw)
+            ).all()
+            if s.player_id not in {p.player_id for p in picks}
+            and (s.xmins or 0) >= MIN_XMINS_FOR_SCORING
+        ]
+        if others:
+            others[0].actual_points = 50
+            db.flush()
+            hr2 = captain_hit_rate(db)
+            assert hr2["by_list"]["ev"]["hit_rate"] == pytest.approx(0.0)
+    finally:
+        row.deadline_time = original
+        db.flush()
+        db.rollback()

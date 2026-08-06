@@ -539,9 +539,14 @@ def run_full_sync(db: Session, build_proj: bool = True, detail: bool = False) ->
         # cho các vòng đã xong. Phải nằm trong mỗi lần đồng bộ, không phải một việc
         # chạy tay: `player_projections` bị xoá và ghi lại ở lần chạy sau, nên bỏ
         # một lần chụp là mất vĩnh viễn khả năng chấm vòng đó.
-        from app.services.model_performance import capture_snapshots, fill_outcomes
+        from app.services.model_performance import (
+            capture_captain_picks,
+            capture_snapshots,
+            fill_outcomes,
+        )
 
         result["snapshot"] = capture_snapshots(db)
+        result["captain_picks"] = capture_captain_picks(db)
         result["outcomes"] = fill_outcomes(db)
     result["finished_at"] = datetime.now(timezone.utc).isoformat()
     return result
