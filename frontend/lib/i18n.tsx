@@ -21,6 +21,7 @@ const dict: Record<string, { vi: string; en: string }> = {
   news: { vi: "Tin tức & chấn thương", en: "News & Injuries" },
   experts: { vi: "Chuyên gia", en: "Expert Consensus" },
   methodology: { vi: "Phương pháp", en: "Methodology" },
+  performance: { vi: "Chất lượng mô hình", en: "Model Performance" },
   // common
   deadline: { vi: "Hạn chót", en: "Deadline" },
   gameweek: { vi: "Vòng đấu", en: "Gameweek" },

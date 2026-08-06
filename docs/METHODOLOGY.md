@@ -526,9 +526,48 @@ diễn biến thật ("75% ra sân" → "đã rời CLB") thì giữ lại.
 ## 6. Backtest & chống data leakage (spec §18)
 
 - Dự báo GW *t* chỉ dùng dữ liệu có **trước deadline** GW *t* (`data_cutoff`).
-- Đánh giá: MAE, RMSE, Spearman rank, Brier (goal/CS), calibration, captain hit-rate,
-  top-10 precision, tỷ lệ cầu thủ không ra sân.
-- So baseline: tổng điểm mùa, form chính thức, FDR chính thức, ownership cao nhất, "không chuyển nhượng".
+- Đánh giá: MAE, RMSE, Spearman rank, Brier P(start), calibration P(10+), top-10
+  precision — công bố trên trang **Model Performance** (`/performance`).
+- So baseline: `form` chính thức của FPL và sức mạnh đội suy từ kèo.
+
+**Điều kiện nền: phải đóng băng dự báo trước deadline.** `player_projections` bị
+**xoá và ghi lại** mỗi lần chạy engine, nên dự báo đưa ra trước deadline không còn
+tồn tại sau vòng đấu. Vì vậy mỗi lần đồng bộ đều ghi một bản vào
+`projection_snapshots`, rồi **khoá** (`is_locked`) khi deadline qua. Không có bước
+này thì mọi chỉ số ở trên **vĩnh viễn** không đo được — không phải "chưa đo".
+
+Khoá cũng chính là cơ chế chống data leakage: một lần chạy muộn hơn, lúc đã biết
+đội hình ra sân và ai chấn thương, không thể lặng lẽ sửa lại "dự báo" cho đẹp điểm.
+Kết quả thật chỉ đổ vào khi vòng đã `finished` — điểm giữa vòng còn đổi vì bonus
+chốt muộn và dữ liệu còn được điều chỉnh.
+
+Ba trạng thái của mỗi ô, cố tình phân biệt:
+
+| Trạng thái | Nghĩa |
+|---|---|
+| có số | kèm cỡ mẫu `n` và hướng nào là tốt hơn |
+| chưa có dữ liệu | đo được, nhưng chưa đủ dữ liệu — kèm điều kiện cụ thể để có số |
+| **không áp dụng** | **không định nghĩa được** cho cột đó |
+
+Ví dụ của cột cuối: Brier P(start) cho baseline `form`. Chỉ số `form` của FPL là
+một con số điểm, nó không phát ra xác suất đá chính nào để mà chấm. Gộp nó vào
+"chưa có dữ liệu" sẽ khiến người đọc chờ một con số không bao giờ tới.
+
+Hai điều kiện lọc mẫu: chỉ chấm cầu thủ có `xMins ≥ 20` (gộp cả những người mô
+hình dự báo gần như không ra sân sẽ làm MAE trông rất đẹp mà không nói gì về chất
+lượng — đoán 0 điểm cho hậu vệ dự bị hầu như luôn đúng), và chỉ công bố khi có từ
+30 quan sát.
+
+**Một bất đối xứng của FPL API dễ sập bẫy:** trước vòng 1, tổng cả-mùa
+(`minutes`, `bps`, …) vẫn là số của **mùa trước**, nhưng `form` bị **đặt lại về 0**
+cho mọi cầu thủ. Nên cột baseline form là hằng số trước vòng 1: Spearman không định
+nghĩa được, còn MAE/RMSE vẫn ra số nhưng chỉ đang đo điểm trung bình của giải. Trang
+để trống cột đó kèm đúng lý do, thay vì quy sang "chưa đủ mẫu".
+
+**Chưa nối:** baseline kèo ở cấp cầu thủ (cần chạy engine lượt hai mỗi vòng để đóng
+băng cùng thời điểm — chụp lệch thời điểm là so gian lận), và bốn trong sáu chỉ số
+quyết định cần lưu khuyến nghị trước deadline (đội trưởng và thứ tự ghế dự bị hiện
+tính tại chỗ, không lưu). Trang nói rõ từng cái thiếu gì.
 
 ## 7. Giới hạn đã biết
 

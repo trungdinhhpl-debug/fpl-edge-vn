@@ -111,6 +111,28 @@ def chip_calendar(req: ChipCalendarRequest, db: Session = Depends(get_db)) -> di
     )
 
 
+@router.get("/model/performance")
+def model_performance(db: Session = Depends(get_db)) -> dict:
+    """Chất lượng dự báo đo bằng kết quả thật — xem app/services/model_performance.py."""
+    from app.services.model_performance import model_performance as build
+
+    return build(db)
+
+
+@router.post("/model/snapshot")
+def model_snapshot(db: Session = Depends(get_db), gameweek: int | None = None) -> dict:
+    """Đóng băng dự báo của vòng sắp tới để sau này chấm được.
+
+    Chạy tự động trong mỗi lần đồng bộ; endpoint này để chạy tay khi cần.
+    """
+    from app.services.model_performance import capture_snapshots, fill_outcomes
+
+    captured = capture_snapshots(db, gameweek)
+    filled = fill_outcomes(db)
+    db.commit()
+    return {"captured": captured, "outcomes": filled}
+
+
 @router.get("/chips/windows")
 def chips_windows(db: Session = Depends(get_db)) -> dict:
     """Cửa sổ dùng của từng chip, đọc nguyên văn từ FPL (không ghi cứng)."""

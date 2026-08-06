@@ -534,5 +534,14 @@ def run_full_sync(db: Session, build_proj: bool = True, detail: bool = False) ->
     if build_proj:
         from app.engine.projections import build_projections
         result["projections"] = build_projections(db)
+
+        # Đóng băng dự báo của vòng sắp tới NGAY sau khi tính, rồi đổ kết quả thật
+        # cho các vòng đã xong. Phải nằm trong mỗi lần đồng bộ, không phải một việc
+        # chạy tay: `player_projections` bị xoá và ghi lại ở lần chạy sau, nên bỏ
+        # một lần chụp là mất vĩnh viễn khả năng chấm vòng đó.
+        from app.services.model_performance import capture_snapshots, fill_outcomes
+
+        result["snapshot"] = capture_snapshots(db)
+        result["outcomes"] = fill_outcomes(db)
     result["finished_at"] = datetime.now(timezone.utc).isoformat()
     return result

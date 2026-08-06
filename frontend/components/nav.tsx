@@ -4,7 +4,7 @@ import { usePathname } from "next/navigation";
 import { useState } from "react";
 import {
   LayoutDashboard, Users, CalendarRange, CalendarCheck2, Crown, Search, Zap,
-  Newspaper, MessageSquareQuote, BookOpen, Shield, Menu, X, Globe,
+  Newspaper, MessageSquareQuote, BookOpen, Shield, Menu, X, Globe, Gauge,
 } from "lucide-react";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { useT } from "@/lib/i18n";
@@ -22,6 +22,7 @@ const items = [
   { href: "/news", key: "news", icon: Newspaper },
   { href: "/experts", key: "experts", icon: MessageSquareQuote },
   { href: "/methodology", key: "methodology", icon: BookOpen },
+  { href: "/performance", key: "performance", icon: Gauge },
 ];
 
 export function Nav() {

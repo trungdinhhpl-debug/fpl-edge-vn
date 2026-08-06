@@ -25,6 +25,7 @@ from app.models.projections import (  # noqa: F401
     ExpectedMinutes,
     ModelVersion,
     PlayerProjection,
+    ProjectionSnapshot,
 )
 
 __all__ = [
@@ -39,6 +40,7 @@ __all__ = [
     "ModelVersion",
     "ExpectedMinutes",
     "PlayerProjection",
+    "ProjectionSnapshot",
     "ExpertSource",
     "ExpertSignal",
     "ExpertTrackRecord",
