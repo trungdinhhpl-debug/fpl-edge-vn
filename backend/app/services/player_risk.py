@@ -186,10 +186,14 @@ def price_risk(transfers_in: int, transfers_out: int, ownership: float) -> dict:
 def source_freshness(db: Session, player: Player) -> dict:
     """Dữ liệu của cầu thủ này cũ bao nhiêu, và cũ ở phần nào.
 
-    Tách hai mốc vì chúng già đi với nhịp khác nhau: `player.updated_at` là lần
-    đồng bộ bootstrap gần nhất (giá, trạng thái, tổng cả mùa), còn số phút từng
-    vòng chỉ có nếu đã chạy đồng bộ chi tiết — thiếu nó thì mô hình xoay vòng phải
-    dùng tổng cả mùa, kém hơn nhiều.
+    Ba mốc, vì chúng già đi với nhịp khác nhau:
+
+      * `last_fpl_sync` — lần đồng bộ FPL gần nhất. Đây là mốc quyết định `stale`.
+      * `player_updated_at` — lần hàng của cầu thủ này thật sự ĐỔI GIÁ TRỊ. Không
+        dùng để kết luận cũ/mới: `onupdate` chỉ nhích khi có thay đổi, nên một cầu
+        thủ không đổi gì suốt tuần sẽ mang mốc rất cũ dù dữ liệu vừa được xác nhận.
+      * `has_gameweek_detail` — có số phút từng vòng hay không. Thiếu nó thì mô hình
+        xoay vòng phải dùng tổng cả mùa, kém hơn nhiều.
     """
     now = _now()
     updated = _aware(player.updated_at)
@@ -209,7 +213,14 @@ def source_freshness(db: Session, player: Player) -> dict:
         ).limit(1)
     ) is not None
 
-    stale = bool(age_min is not None and age_min > 12 * 60)
+    # "Cũ" phải đo bằng tuổi của LẦN ĐỒNG BỘ, không phải `player.updated_at`.
+    # `updated_at` có `onupdate=func.now()` nên chỉ nhích khi hàng thật sự đổi giá
+    # trị; đồng bộ ghi lại đúng số cũ thì SQLAlchemy không phát UPDATE và mốc đó
+    # đứng nguyên. Đã thấy hậu quả trên production: badge "đã cũ" nằm cạnh dòng
+    # "đồng bộ gần nhất cách đây 9 phút" — hai câu tự mâu thuẫn trên cùng một thẻ.
+    stale = bool(sync_age_min is not None and sync_age_min > 12 * 60)
+    if sync_age_min is None:
+        stale = bool(age_min is not None and age_min > 12 * 60)
     return {
         "player_updated_at": updated.isoformat() if updated else None,
         "player_age_minutes": None if age_min is None else round(age_min, 1),

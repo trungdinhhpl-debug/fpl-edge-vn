@@ -272,3 +272,43 @@ def test_player_scorecard_has_all_thirteen_fields(db):
     # mỗi nhãn rủi ro phải kèm căn cứ để người đọc tự kiểm
     for k in ("rotation_risk", "injury_risk", "price_risk"):
         assert sc[k]["basis"]
+
+
+def test_freshness_uses_sync_age_not_row_update_time(db):
+    """"Cũ" phải theo tuổi lần ĐỒNG BỘ, không theo `player.updated_at`.
+
+    `updated_at` có `onupdate` nên chỉ nhích khi hàng thật sự đổi giá trị. Bản đầu
+    dùng nó và production hiện ra badge "đã cũ" ngay cạnh dòng "đồng bộ gần nhất
+    cách đây 9 phút" — hai câu tự mâu thuẫn trên cùng một thẻ.
+    """
+    from app.models import Player, SourceFetchLog
+    from app.services.player_risk import source_freshness
+
+    p = db.scalar(select(Player))
+    # hàng của cầu thủ mang mốc rất cũ...
+    original_updated = p.updated_at
+    p.updated_at = datetime.now(timezone.utc) - timedelta(days=30)
+    # ...nhưng vừa đồng bộ xong
+    log = SourceFetchLog(
+        source_name="FPL bootstrap-static", status="ok", rows=1,
+        fetched_at=datetime.now(timezone.utc),
+    )
+    db.add(log)
+    db.flush()
+    try:
+        f = source_freshness(db, p)
+        assert f["stale"] is False, "quy sai sang updated_at nên báo cũ oan"
+        assert f["fpl_sync_age_minutes"] is not None
+        assert f["fpl_sync_age_minutes"] < 60
+        # vẫn báo cáo mốc của hàng, chỉ là không dùng để kết luận
+        assert f["player_age_minutes"] is not None
+        assert f["player_age_minutes"] > 60 * 24
+
+        # đồng bộ cũ thật thì phải báo cũ
+        log.fetched_at = datetime.now(timezone.utc) - timedelta(hours=20)
+        db.flush()
+        assert source_freshness(db, p)["stale"] is True
+    finally:
+        p.updated_at = original_updated
+        db.flush()
+        db.rollback()
