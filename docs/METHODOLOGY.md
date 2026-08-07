@@ -73,7 +73,8 @@ Tỷ lệ per-90 được **Bayesian shrinkage** về mức nền theo vị trí
 rate_shrunk = w·(season_rate) + (1−w)·prior,   w = minutes / (minutes + 540)
 ```
 
-rồi nhân với `xMins/90` và hệ số độ khó trận:
+rồi nhân với `xMins/90`. Hệ số độ khó trận **chỉ áp cho bàn thắng và kiến tạo** —
+xem chú thích dưới bảng công thức:
 
 ```
 fixture_adj = clamp(λ_team_goals(fixture) / λ_team_goals(season_avg), 0.4, 1.8)
@@ -83,9 +84,37 @@ appearance  = P(≥60')·2 + (P(appear) − P(≥60'))·1
 clean_sheet = e^(−λ_conceded) · P(≥60') · cs_pts[pos]
 conceded    = (λ_conceded / 2) · (−1) · P(≥60')          # GK/DEF
 saves_EV    = (saves90 · xMins/90 · shot_adj) / 3         # GK
-defcon_EV   = 2 · P(actions ≥ ngưỡng)                     # Poisson
+defcon_EV   = 2 · P(actions ≥ ngưỡng)                     # Poisson, KHÔNG có fixture_adj
 bonus_EV    = chia quỹ 6 điểm trong nội bộ trận            # xem 2c
 ```
+
+**Defensive Contribution là luật NGƯỠNG, không phải tỷ lệ.** Hậu vệ đạt ≥ 10 hành
+động được 2 điểm; tiền vệ và tiền đạo cần ≥ 12; thủ môn không có. Mô hình vì thế
+tính `2 · P(số hành động ≥ ngưỡng)` với số hành động ~ Poisson(dc90 · xMins/90) —
+không nhân tỷ lệ, và trần 2 điểm được thoả theo cấu tạo vì xác suất ≤ 1. Điểm và
+ngưỡng đọc từ API: `{'DEF': 2, 'MID': 2, 'FWD': 2, 'GKP': 0}`.
+
+Rổ hành động khác nhau theo vị trí — hậu vệ tính CBIT (clearances, blocks,
+interceptions, tackles), tiền vệ và tiền đạo tính thêm recoveries (CBIRT). Engine
+**không phải tự dựng lại** rổ đó: trường `defensive_contribution` của FPL đã đúng rổ
+theo vị trí. Đã kiểm chứng trên dữ liệu mùa 2025/26 (cầu thủ ≥ 1500 phút): hậu vệ
+khớp CBI+tackles ở 69/71 trường hợp, tiền vệ khớp CBI+tackles+recoveries ở 87/88,
+tiền đạo 19/19, thủ môn luôn bằng 0.
+
+**Hai giới hạn của phần này, nói rõ vì chúng không nhìn ra từ công thức:**
+
+- **Không có điều chỉnh theo đối thủ.** `fixture_adj` chỉ áp cho bàn thắng và kiến
+  tạo. Hành động phòng ngự thì chưa phản ứng với sức ép: đo được Gabriel (Arsenal)
+  có `defcon_EV = 0.293` **giống hệt nhau ở cả 8 vòng**, gặp Coventry hay Chelsea
+  không khác gì. Thực tế hậu vệ bị vây hãm sẽ phá bóng và cản phá nhiều hơn. Sửa
+  đúng thì phải dùng một hệ số theo **λ bàn thua** (giống `shot_adj` của thủ môn),
+  không phải `fixture_adj` vốn xây trên λ bàn thắng của chính đội mình — dùng nhầm
+  hệ số đó sẽ cho kết quả ngược.
+- **Poisson có thể quá hẹp.** Số hành động mỗi trận thường phân tán rộng hơn Poisson
+  (over-dispersed), mà `P(X ≥ 10)` rất nhạy với đuôi phân phối khi trung bình nằm
+  sát ngưỡng. Kiểm được điều này cần số liệu **từng trận** (`player_gameweek_stats`,
+  hiện rỗng vì `SYNC_PLAYERS_DETAIL` đang tắt); trước khi có, đây là một giả định
+  chưa kiểm chứng chứ không phải một lựa chọn đã đo.
 
 **Luật tính điểm** đọc từ `app/scoring.py`, nạp nguyên văn từ
 `bootstrap-static.game_config` của mùa đang chạy (gồm Defensive Contribution) —

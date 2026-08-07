@@ -53,7 +53,28 @@ export default function MethodologyPage() {
             <code className="block rounded bg-muted p-2 text-xs text-foreground">
               xP = ra sân + bàn + kiến tạo + sạch lưới + cứu thua + bonus + def.contribution − thẻ − thủng lưới
             </code>
-            <p>Tỷ lệ per-90 (xG, xA, def. contribution) được <b>Bayesian shrinkage</b> về mức nền theo vị trí để tránh đánh giá quá cao mẫu nhỏ, rồi nhân với xMins và độ khó trận đấu (mô hình Poisson theo sức mạnh đội).</p>
+            <p>
+              Tỷ lệ per-90 (xG, xA, def. contribution) được <b>Bayesian shrinkage</b> về mức
+              nền theo vị trí để tránh đánh giá quá cao mẫu nhỏ, rồi nhân với xMins. Hệ số độ
+              khó trận đấu <b>chỉ áp cho bàn thắng và kiến tạo</b> — xem mục Defensive
+              Contribution bên dưới.
+            </p>
+            <p>
+              <b>Defensive Contribution là luật ngưỡng, không phải tỷ lệ.</b> Hậu vệ đạt{" "}
+              <b>≥ 10</b> hành động (CBIT) được 2 điểm; tiền vệ và tiền đạo cần <b>≥ 12</b>{" "}
+              (CBIRT); thủ môn không có. Mô hình tính <code>2 × P(số hành động ≥ ngưỡng)</code>{" "}
+              với số hành động theo Poisson — trần 2 điểm mỗi trận được thoả theo cấu tạo vì
+              xác suất không vượt 1. Rổ hành động theo vị trí do chính FPL cung cấp sẵn trong
+              trường <code>defensive_contribution</code>, đã kiểm chứng trên dữ liệu mùa
+              2025/26 (hậu vệ khớp CBI+tackles 69/71, tiền vệ khớp thêm recoveries 87/88).
+            </p>
+            <p className="rounded-md bg-caution/10 px-2.5 py-2 text-caution">
+              ⚠ Giới hạn: hành động phòng ngự <b>chưa phản ứng với đối thủ</b>. Đo được Gabriel
+              (Arsenal) có defcon = 0,293 giống hệt ở cả 8 vòng, gặp Coventry hay Chelsea không
+              khác gì — trong khi thực tế hậu vệ bị vây hãm sẽ phá bóng và cản phá nhiều hơn.
+              Sửa đúng phải dùng hệ số theo λ <i>bàn thua</i>, không phải hệ số độ khó hiện có
+              (vốn xây trên λ bàn thắng của chính đội mình, dùng vào đây sẽ cho kết quả ngược).
+            </p>
             <p>Luật tính điểm đọc từ <code>game_config</code> của FPL cho mùa đang chạy (gồm <b>Defensive Contribution</b>) — không hard-code tên mùa hay điểm từng hạng mục.</p>
             <p>
               Riêng <b>trọng số BPS thì FPL không phát qua API</b>, nên chúng được đánh phiên
