@@ -551,3 +551,85 @@ def test_market_weight_falls_when_few_books_priced_the_fixture():
     # nhưng vẫn phải nhúc nhích theo thị trường, không bị bỏ hẳn
     no_market = TeamStrength(teams, [], [], market={}, market_weight=0.7)
     assert lam_thin > no_market.expected_goals(1, 2, True)[0]
+
+
+# ----------------------------------------- mốc hàng thủ & chiết khấu đổi HLV ----
+def test_defence_proxy_uses_the_goalkeeper_not_any_outfield_player():
+    """Mốc hàng thủ phải là thủ môn, theo xGC/90.
+
+    Bản trước lấy `max(expected_goals_conceded)` toàn đội và chọn nhầm người:
+    hàng thủ Man City bị chấm bằng Elliot Anderson — 53.6 xGC tích luỹ ở
+    Nottingham Forest — nên City thành "kém trung bình giải" và Crystal Palace được
+    cho 2.01 bàn kỳ vọng khi tiếp City.
+    """
+    from app.engine.team_strength import _defence_proxy
+
+    class P:
+        def __init__(self, pid, team, etype, mins, xgc):
+            self.id, self.team_id, self.element_type = pid, team, etype
+            self.minutes, self.expected_goals_conceded = mins, xgc
+
+    players = [
+        P(1, 10, 1, 3060, 38.4),    # thủ môn: 1.13 / 90
+        P(2, 10, 3, 3332, 53.6),    # tiền vệ có xGC TỔNG cao hơn — không được chọn
+        P(3, 10, 1, 400, 12.0),     # thủ môn dự bị, dưới ngưỡng phút
+    ]
+    out = _defence_proxy(players)
+    assert out[10] == pytest.approx(38.4 / (3060 / 90), rel=1e-6)
+    assert out[10] < 1.3, "chọn nhầm cầu thủ ngoài sân"
+
+
+def test_defence_proxy_skips_flagged_new_signings():
+    """Tân binh mang xGC của CLB CŨ — dùng vào là chấm nhầm đội."""
+    from app.config import settings
+    from app.engine.team_strength import _defence_proxy
+
+    class P:
+        def __init__(self, pid, team, etype, mins, xgc):
+            self.id, self.team_id, self.element_type = pid, team, etype
+            self.minutes, self.expected_goals_conceded = mins, xgc
+
+    signing_id = int((settings.new_signing_players.split(",") or ["0"])[0])
+    players = [
+        P(signing_id, 20, 1, 3400, 90.0),   # tân binh, xGC/90 rất xấu
+        P(999_001, 20, 1, 2000, 20.0),      # thủ môn thật của CLB
+    ]
+    out = _defence_proxy(players)
+    assert out[20] == pytest.approx(20.0 / (2000 / 90), rel=1e-6)
+
+
+def test_defence_proxy_tolerates_partial_player_objects():
+    """Thiếu một thuộc tính không được làm sập cả mô hình sức mạnh đội."""
+    from app.engine.team_strength import _defence_proxy
+
+    class Bare:
+        def __init__(self, team):
+            self.team_id = team
+
+    assert _defence_proxy([Bare(1), Bare(2)]) == {}
+
+
+def test_new_manager_discounts_last_season_rating():
+    """CLB đổi HLV thì xếp hạng mùa trước bị kéo về trung bình giải.
+
+    Trước vòng 1, `own_minutes` là số phút MÙA TRƯỚC nên nguyên trạng nó cho trọng
+    số ~0.79 vào một mô tả của đội bóng CŨ — trong khi 12/20 CLB đã đổi HLV.
+    """
+    from app.config import settings
+    from app.engine.team_strength import _manager_factor
+    from app.services.season_state import new_manager_clubs
+
+    changed = sorted(new_manager_clubs())
+    if not changed:
+        pytest.skip("chưa khai CLB nào đổi HLV")
+
+    class T:
+        def __init__(self, short):
+            self.short_name = short
+
+    assert _manager_factor(T(changed[0])) == pytest.approx(
+        settings.prior_weight_new_manager
+    )
+    assert _manager_factor(T("__KHONG_TON_TAI__")) == 1.0
+    # hệ số phải kéo VỀ trung bình, tức nhỏ hơn 1
+    assert settings.prior_weight_new_manager < 1.0

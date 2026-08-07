@@ -45,6 +45,85 @@ HISTORY_SHRINK_MINUTES = 8000
 CHAMP_FADE_MATCHES = 5
 
 
+# Số phút tối thiểu để một thủ môn được dùng làm mốc hàng thủ. Dưới mức này thì
+# xGC/90 quá nhiễu (một trận thua đậm là đủ bóp méo).
+MIN_GK_MINUTES_FOR_PROXY = 900
+
+
+def _defence_proxy(players: list) -> dict[int, float]:
+    """xGC trên 90 phút của thủ môn đá nhiều nhất mỗi đội.
+
+    Vì sao phải là thủ môn, và vì sao phải theo /90 — bản trước lấy
+    `max(expected_goals_conceded)` trong toàn đội và sai theo hai cách:
+
+    1. **`expected_goals_conceded` là số của MÙA TRƯỚC, còn `team_id` là CLB HIỆN
+       TẠI.** FPL API không cho biết số đó tích luỹ ở đâu. Kết quả đo được: hàng thủ
+       Man City bị chấm bằng Elliot Anderson — 53.6 xGC tích luỹ ở Nottingham
+       Forest. City thành "kém trung bình giải" (0.887), và Crystal Palace được cho
+       2.01 bàn kỳ vọng khi tiếp City. 4/20 đội dính lỗi này.
+    2. **Tổng cả mùa phụ thuộc số phút.** 10/20 đội có mốc là cầu thủ ngoài sân;
+       xGC của họ chỉ tính những phút có mặt, nên đội nào hay xoay trung vệ lại
+       trông như phòng ngự tốt hơn.
+
+    Thủ môn giải quyết cả hai: ít bị xoay vòng nhất, và xGC/90 của họ **chính là**
+    mức bị uy hiếp của đội trong thời gian họ trên sân — một tỷ lệ, không phụ thuộc
+    số phút. Loại tân binh đã khai để không lặp lại lỗi (1).
+
+    Lưu ý bất đối xứng, và đây là lý do phía TẤN CÔNG cố ý KHÔNG sửa theo cách này:
+    xG **đi theo cầu thủ** (tiền đạo chuyển CLB thì bàn thắng của anh ta thành sản
+    lượng kỳ vọng của CLB mới, nên cộng vào là đúng), còn xGC là thuộc tính của
+    ĐỘI BÓNG và **không đi theo ai cả**.
+
+    Đội không có thủ môn đủ điều kiện (đội mới lên hạng) trả về 0.0 — nhánh
+    `promoted` phía dưới xử lý riêng.
+    """
+    from app.services.season_state import new_signing_players
+
+    signings = new_signing_players()
+    best: dict[int, object] = {}
+    for p in players:
+        # `getattr` chứ không truy cập thẳng: hàm này còn được gọi với các đối tượng
+        # cầu thủ rút gọn (test, và các nhánh chỉ cần vài trường), thiếu một thuộc
+        # tính không được phép làm sập cả mô hình sức mạnh đội.
+        if getattr(p, "element_type", None) != 1:
+            continue
+        if str(getattr(p, "id", "")) in signings:
+            continue
+        mins = getattr(p, "minutes", 0) or 0
+        if mins < MIN_GK_MINUTES_FOR_PROXY:
+            continue
+        cur = best.get(p.team_id)
+        if cur is None or mins > (getattr(cur, "minutes", 0) or 0):
+            best[p.team_id] = p
+
+    out: dict[int, float] = {}
+    for tid, gk in best.items():
+        mins = getattr(gk, "minutes", 0) or 0
+        xgc = getattr(gk, "expected_goals_conceded", 0.0) or 0.0
+        out[tid] = xgc / (mins / 90.0) if mins else 0.0
+    return out
+
+
+def _manager_factor(team) -> float:
+    """Chiết khấu xếp hạng mùa trước khi CLB đã đổi huấn luyện viên.
+
+    Dùng lại `prior_weight_new_manager` — đúng hệ số mà mô hình xMins đã dùng cho
+    từng cầu thủ của các CLB đó. Một sự thật ("đội này đổi HLV nên dữ liệu cũ mô tả
+    kém hơn") thì phải mang cùng một con số ở mọi nơi, chứ không đặt riêng mỗi chỗ.
+
+    Danh sách CLB đổi HLV do người vận hành khai (FPL API không công bố), nên danh
+    sách rỗng nghĩa là CHƯA AI KHAI — khi đó không chiết khấu ai cả, và đó là hành
+    vi đúng: không được tự bịa ra thay đổi.
+    """
+    from app.config import settings
+    from app.services.season_state import new_manager_clubs
+
+    short = (getattr(team, "short_name", "") or "").upper()
+    if short and short in new_manager_clubs():
+        return settings.prior_weight_new_manager
+    return 1.0
+
+
 def _clamp(v: float, lo: float = 0.55, hi: float = 1.7) -> float:
     return max(lo, min(hi, v))
 
@@ -192,14 +271,8 @@ class TeamStrength:
         for p in players:
             team_xg[p.team_id] = team_xg.get(p.team_id, 0.0) + (p.expected_goals or 0.0)
 
-        # team xGA proxy = the highest per-player expected_goals_conceded on the
-        # team (a full-season nailed player ≈ team's season xGA). Used to derive a
-        # DEFENCE index when FPL's strength ratings are absent (pre-season = all 0).
-        team_xga_proxy: dict[int, float] = {t.id: 0.0 for t in teams}
-        for p in players:
-            team_xga_proxy[p.team_id] = max(
-                team_xga_proxy.get(p.team_id, 0.0), p.expected_goals_conceded or 0.0
-            )
+        # Proxy hàng thủ = xGC/90 của THỦ MÔN đá nhiều nhất — xem `_defence_proxy`.
+        team_xga_proxy = _defence_proxy(players)
         # tổng số phút Ngoại hạng của cả đội — dùng để phát hiện đội mới lên hạng
         team_minutes: dict[int, int] = {t.id: 0 for t in teams}
         for p in players:
@@ -256,9 +329,20 @@ class TeamStrength:
                     if _xga and mean_team_xga
                     else 1.0
                 )
-                # cỡ mẫu nhỏ (vd vừa hết vòng 1) -> kéo về trung bình giải, tránh
-                # kết luận một đội mạnh/yếu chỉ từ một trận đấu
+                # Cỡ mẫu nhỏ -> kéo về trung bình giải, tránh kết luận một đội
+                # mạnh/yếu chỉ từ một trận.
                 w_hist = own_minutes / (own_minutes + HISTORY_SHRINK_MINUTES)
+
+                # ...nhưng cỡ mẫu KHÔNG phải điều duy nhất đáng hỏi. `own_minutes`
+                # trước vòng 1 là số phút của MÙA TRƯỚC, nên nguyên trạng nó cho
+                # trọng số ~0.79 vào một mô tả của đội bóng CŨ. Mùa 2026/27 có 12/20
+                # CLB đổi huấn luyện viên — hàng thủ và cách pressing đổi theo, nên
+                # xếp hạng mùa trước mô tả đội hiện tại kém hẳn đi.
+                #
+                # Không đưa về 0 (dữ liệu mùa trước vẫn có tín hiệu thật) mà chiết
+                # khấu đúng bằng hệ số đã dùng cho từng cầu thủ ở xMins — cùng một
+                # sự thật thì phải cùng một con số, không đặt riêng mỗi nơi một kiểu.
+                w_hist *= _manager_factor(t)
                 derived_att = w_hist * raw_att + (1 - w_hist) * 1.0
                 derived_def = w_hist * raw_def + (1 - w_hist) * 1.0
             has_fpl = bool(t.strength_attack_home)

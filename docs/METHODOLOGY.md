@@ -258,6 +258,56 @@ Thứ tự gần như không đổi: top-20 theo tổng xP 8 vòng giữ lại 1
 kết hợp strength ratings của FPL với xG/xGA thực nghiệm, blend theo số trận đã đá
 (shrinkage), có điều chỉnh sân nhà/khách (Poisson).
 
+### 2a-bis. Sức mạnh đội trước vòng 1 — hai lỗi đã sửa
+
+Trước vòng 1, FPL **chưa phát chỉ số sức mạnh**: cả 20 đội đều có `strength = None`
+và `strength_attack/defence_* = 0`. Engine vì thế rơi sang nhánh tự suy từ dữ liệu
+cầu thủ, và nhánh đó có hai lỗi.
+
+**1. Mốc hàng thủ lấy nhầm người.** Bản trước dùng `max(expected_goals_conceded)`
+trong toàn đội, với lập luận "một cầu thủ đá cả mùa ≈ xGA của đội". Hai chỗ hỏng:
+
+- `expected_goals_conceded` là số **mùa trước**, còn `team_id` là CLB **hiện tại**,
+  và FPL API không cho biết số đó tích luỹ ở đâu. Đo được: hàng thủ Man City bị
+  chấm bằng **Elliot Anderson — 53.6 xGC tích luỹ ở Nottingham Forest**. City thành
+  0.887 (kém trung bình giải), và Crystal Palace được cho **2.01 bàn kỳ vọng khi
+  tiếp City** — ô lịch hiện màu xanh. 4/20 đội dính lỗi này (MCI, CHE, IPS, COV).
+- Tổng cả mùa phụ thuộc số phút: 10/20 đội có mốc là cầu thủ ngoài sân, mà xGC của
+  họ chỉ tính những phút có mặt — đội hay xoay trung vệ trông như phòng ngự tốt hơn.
+
+Giờ mốc là **xGC/90 của thủ môn đá nhiều nhất**, loại tân binh đã khai. Thủ môn ít
+bị xoay vòng nhất, và xGC/90 của họ *chính là* mức bị uy hiếp của đội khi họ trên
+sân — một tỷ lệ, không phụ thuộc số phút. Phủ 17/20 đội; ba đội còn lại đúng là
+nhóm mới lên hạng, vốn đã đi nhánh `PROMOTED_DEFENCE` riêng.
+
+Kết quả: Man City từ 0.887 lên **1.109 (nhì giải, sau Arsenal 1.572)**, và ô
+CRY–MCI đi từ `λ_for 2.01 / độ khó 2.2` xuống **`1.54 / 3.1`** — hết xanh.
+
+**Bất đối xứng cố ý: phía TẤN CÔNG không sửa theo cách này.** xG **đi theo cầu
+thủ** — tiền đạo chuyển CLB thì bàn thắng của anh ta trở thành sản lượng kỳ vọng
+của CLB mới, nên cộng vào tổng xG của CLB mới là *đúng* (26.9% xG của Chelsea đến
+từ tân binh, và đó là con số hợp lệ). Còn xGC là thuộc tính của **đội bóng** và
+không đi theo ai cả. Cùng một trường dữ liệu, hai cách đọc khác nhau.
+
+**2. Trọng số tiền mùa tin dữ liệu cũ quá nhiều.** `w_hist = phút/(phút + 8000)`
+dùng số phút **mùa trước** làm thước đo cỡ mẫu, nên trước vòng 1 nó cho trọng số
+~0.79 vào một mô tả của đội bóng **cũ** — trong khi mùa 2026/27 có **12/20 CLB đổi
+huấn luyện viên**. Giờ `w_hist` được nhân thêm `prior_weight_new_manager` (0.6) với
+những CLB đó — **đúng hệ số mà mô hình xMins đã dùng** cho từng cầu thủ của chính
+các CLB ấy. Một sự thật thì mang cùng một con số ở mọi nơi.
+
+Không đưa về 0: dữ liệu mùa trước vẫn có tín hiệu thật, chỉ là mô tả đội hiện tại
+kém đi. Danh sách CLB đổi HLV do người vận hành khai (API không công bố) — rỗng
+nghĩa là **chưa ai khai**, và khi đó không chiết khấu ai cả.
+
+**Tác động đo được** (trung bình mỗi cầu thủ mỗi vòng): thủ môn +0.065 xP, hậu vệ
++0.062, tiền vệ −0.042, tiền đạo −0.108; xác suất sạch lưới +1.8 đến +2.3 điểm %.
+Đội tăng nhiều nhất FUL/TOT/BHA, giảm nhiều nhất CHE/LEE.
+
+**Điểm yếu còn lại:** việc loại tân binh dựa vào `NEW_SIGNING_PLAYERS` khai tay. FPL
+API không cho biết cầu thủ đổi CLB, nên không tự động được — một tân binh chưa có
+trong danh sách vẫn sẽ làm lệch mốc hàng thủ của CLB mới.
+
 ### 2b. Nghịch đảo kèo nhà cái → λ mỗi đội (`providers/probability.py`)
 
 Vòng nào có kèo thì λ được **khớp đồng thời hai tham số** với cả ba thị trường
