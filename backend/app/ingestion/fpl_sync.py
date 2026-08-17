@@ -14,6 +14,7 @@ from app.config import settings
 from app.models import (
     ExpertSignal,
     ExpertSource,
+    ExpertTrackRecord,
     Fixture,
     Gameweek,
     InjuryReport,
@@ -189,6 +190,7 @@ def sync_bootstrap(db: Session, client: FPLClient) -> dict:
             yellow_cards=_i(e.get("yellow_cards")), red_cards=_i(e.get("red_cards")),
             bonus=_i(e.get("bonus")), bps=_i(e.get("bps")),
             penalties_order=e.get("penalties_order"),
+            penalties_missed=_i(e.get("penalties_missed")),
             corners_and_indirect_freekicks_order=e.get("corners_and_indirect_freekicks_order"),
             direct_freekicks_order=e.get("direct_freekicks_order"),
             expected_goals=_f(e.get("expected_goals")),
@@ -363,9 +365,96 @@ def seed_experts(db: Session) -> dict:
             summary=sig.summary, link=sig.link, signal_score=score, is_mock=True,
             origin_ref=sig.origin_ref,
         ))
-    _log(db, "Expert seed (mock)", "internal", "ok", 0, "labelled mock data", "community")
+    # Xoá nguồn KHÔNG còn trong đăng bạ, kèm mọi tín hiệu của nó.
+    #
+    # Ghi đè theo tên thôi thì chưa đủ: 5 hàng "Nguồn demo A–E" đã bị bỏ khỏi code
+    # nhưng vẫn nằm nguyên trong CSDL production, và không vòng lặp nào ở trên chạm
+    # tới chúng — chỉ có phép xoá tường minh mới dọn được. Mọi nguồn trong bảng đều
+    # do chính hàm này gieo, nên "không còn trong đăng bạ" đúng bằng "phải xoá".
+    keep = {s.name for s in provider.get_sources()}
+    stale = [s for s in db.scalars(select(ExpertSource)).all() if s.name not in keep]
+    for s in stale:
+        db.execute(delete(ExpertSignal).where(ExpertSignal.source_id == s.id))
+        db.execute(delete(ExpertTrackRecord).where(ExpertTrackRecord.source_id == s.id))
+        db.delete(s)
+
+    _log(db, "Expert registry", "internal", "ok", len(name_to_source),
+         f"đăng bạ {len(name_to_source)} nguồn; xoá {len(stale)} nguồn không còn "
+         f"trong đăng bạ; tín hiệu thật do sync_expert_signals nạp", "community")
     db.commit()
-    return {"sources": len(name_to_source)}
+    return {"sources": len(name_to_source), "removed": [s.name for s in stale]}
+
+
+def sync_expert_signals(db: Session, bootstrap: dict | None = None) -> dict:
+    """Tín hiệu chuyên gia THẬT, từ API công khai của FPL.
+
+    Hai nguồn, và cả hai đều là dữ liệu first-party chứ không phải nội dung cào về:
+
+    * **Mô hình riêng của FPL** (`ep_next`) — có ngay, kể cả tiền mùa.
+    * **Đồng thuận nhóm dẫn đầu** — đội hình thật của top N bảng xếp hạng tổng.
+      Chưa dùng được cho tới sau hạn chót vòng 1, và khi đó nó ghi rõ lý do thay
+      vì im lặng trả rỗng.
+
+    Ghi `is_mock=False`, nên `seed_experts` (vốn chỉ xoá hàng `is_mock=True`) không
+    bao giờ đụng vào chúng.
+    """
+    from app.providers.expert_provider import compute_signal_score
+    from app.providers.fpl_experts import (
+        fetch_top_manager_consensus,
+        fpl_model_signals,
+        top_manager_signals,
+    )
+
+    if bootstrap is None:
+        with FPLClient() as client:
+            bootstrap = client.bootstrap_static()
+    elements = bootstrap.get("elements", [])
+    events = bootstrap.get("events", [])
+    nxt = next((e["id"] for e in events if e.get("is_next")), None)
+    cur = next((e["id"] for e in events if e.get("is_current")), None)
+
+    by_name = {s.name: s for s in db.scalars(select(ExpertSource)).all()}
+    players = {p.web_name: p for p in db.scalars(select(Player)).all()}
+
+    seeds = list(fpl_model_signals(elements))
+    notes: list[str] = [f"mô hình FPL: {len(seeds)} tín hiệu"]
+
+    top_name = next((n for n in by_name if n.startswith("Top ")), None)
+    if not settings.expert_fetch_top_managers:
+        notes.append("đồng thuận nhóm dẫn đầu: đã tắt bằng cấu hình")
+    elif top_name:
+        # Đội hình chỉ công khai SAU hạn chót, nên vòng đọc được là vòng hiện tại.
+        consensus = fetch_top_manager_consensus(gameweek=cur)
+        if consensus.available:
+            seeds += top_manager_signals(consensus, elements, top_name)
+        notes.append(f"nhóm dẫn đầu: {consensus.reason}")
+
+    # Chỉ xoá tín hiệu THẬT của lần đồng bộ trước; đăng bạ nguồn giữ nguyên.
+    db.execute(delete(ExpertSignal).where(ExpertSignal.is_mock.is_(False)))
+    written = 0
+    for sig in seeds:
+        src = by_name.get(sig.source_name)
+        player = players.get(sig.web_name)
+        if not src or not player:
+            continue
+        specificity = 0.85 if sig.signal_type in ("start", "penalty", "setpiece") else 0.6
+        db.add(ExpertSignal(
+            source_id=src.id, player_id=player.id, gameweek=nxt,
+            signal_type=sig.signal_type, confidence=sig.confidence,
+            summary=sig.summary, link=sig.link,
+            signal_score=compute_signal_score(
+                src.reliability, src.historical_accuracy, src.independence,
+                specificity, sig.published_hours_ago,
+            ),
+            is_mock=False, origin_ref=sig.origin_ref,
+            published_at=datetime.now(timezone.utc),
+        ))
+        written += 1
+
+    _log(db, "Expert signals (FPL API)", "fantasy.premierleague.com", "ok",
+         written, " · ".join(notes), "community")
+    db.commit()
+    return {"signals": written, "notes": notes}
 
 
 # ----------------------------------------------------------- market odds ------
@@ -546,6 +635,12 @@ def run_full_sync(db: Session, build_proj: bool = True, detail: bool = False) ->
         result["bootstrap"] = sync_bootstrap(db, client)
         result["fixtures"] = sync_fixtures(db, client)
     result["experts"] = seed_experts(db)
+    result["expert_signals"] = sync_expert_signals(db)
+    # Đóng vòng lặp đo lường: dự báo đã phát ra phải được chấm bằng kết quả thật,
+    # nếu không thì độ chính xác trên trang Chuyên gia vĩnh viễn là "chưa đủ dữ liệu".
+    from app.services.expert_scoring import score_finished_gameweeks
+
+    result["expert_scoring"] = score_finished_gameweeks(db)
     result["odds"] = sync_odds(db)
     result["championship"] = sync_championship(db)
     if build_proj:

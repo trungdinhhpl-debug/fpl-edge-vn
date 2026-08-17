@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
 
 
 @dataclass
@@ -68,46 +67,20 @@ DEFAULT_SOURCES: list[ExpertSourceSeed] = [
                      "chip_planning,captaincy", 0.9, False),
     ExpertSourceSeed("r/FantasyPL", "community", "https://reddit.com/r/FantasyPL",
                      0.45, 0.0, "captaincy", 0.6, False),
-    # Synthetic sources for the demo signals below. Real people never get
-    # invented statements attached to them, so the demo needs its own cast.
-    ExpertSourceSeed("Nguồn demo A", "site", None, 0.70, 0.0, "lineup", 1.0, False),
-    ExpertSourceSeed("Nguồn demo B", "analyst", None, 0.65, 0.0, "lineup,statistics", 1.0, False),
-    ExpertSourceSeed("Nguồn demo C", "community", None, 0.45, 0.0, "captaincy", 0.7, False),
-    ExpertSourceSeed("Nguồn demo D", "analyst", None, 0.68, 0.0, "captaincy", 1.0, False),
-    ExpertSourceSeed("Nguồn demo E", "community", None, 0.42, 0.0, "statistics", 0.8, False),
 ]
 
-_NOW = datetime.now(timezone.utc)
-
-# Demo signals for the UI and the echo-detection maths.
+# Không còn tín hiệu nào được ghi cứng ở đây.
 #
-# Attributed to obviously-synthetic names on purpose: the previous seed put
-# invented quotes in the mouths of real, named analysts ("Ben Crellin: captain
-# Salah"), which is a fabricated statement attributed to a real person. Demo
-# data must never do that. Wire a licensed/RSS adapter to replace these.
+# Bản trước có một dàn "Nguồn demo A–E" với các phát biểu đóng dấu `[DEMO]`. Chúng
+# tồn tại để phần toán đồng thuận có gì mà chạy, nhưng chúng không nói được điều gì
+# về bóng đá, và một trang tên là "Chuyên gia" chạy bằng dữ liệu bịa thì tệ hơn là
+# một trang trống — nó dạy người đọc tin vào một thứ không có thật.
 #
-# `origin_ref` is what makes echo detection possible: signals tracing back to the
-# same primary statement share one, so eight posts about one presser quote count
-# as one independent source, not eight.
-DEFAULT_SIGNALS: list[ExpertSignalSeed] = [
-    ExpertSignalSeed("Nguồn demo A", "start", "Haaland", 0.95,
-                     "[DEMO] Chắc suất đá chính, không thấy dấu hiệu xoay tua.",
-                     0, 8, origin_ref="demo:presser:MCI:gw1"),
-    ExpertSignalSeed("Nguồn demo B", "start", "Haaland", 0.9,
-                     "[DEMO] Dẫn lại phát biểu họp báo của HLV.",
-                     0, 7, origin_ref="demo:presser:MCI:gw1"),
-    ExpertSignalSeed("Nguồn demo C", "start", "Haaland", 0.88,
-                     "[DEMO] Cũng dẫn lại đúng phát biểu đó.",
-                     0, 6, origin_ref="demo:presser:MCI:gw1"),
-    ExpertSignalSeed("Nguồn demo D", "captain", "Haaland", 0.8,
-                     "[DEMO] Phân tích riêng, không dẫn nguồn khác.", 0, 20),
-    ExpertSignalSeed("Nguồn demo E", "avoid", "Haaland", 0.55,
-                     "[DEMO] Ý kiến trái chiều: lịch khó, giá quá cao.", 0, 10),
-    ExpertSignalSeed("Nguồn demo B", "buy", "Palmer", 0.75,
-                     "[DEMO] Mục tiêu chuyển nhượng theo mô hình.", 0, 30),
-    ExpertSignalSeed("Nguồn demo C", "sell", "Palmer", 0.6,
-                     "[DEMO] Ý kiến trái chiều về Palmer.", 0, 12),
-]
+# Tín hiệu giờ đến từ `app/providers/fpl_experts.py`, lấy từ chính API công khai
+# của FPL. Danh sách các toà soạn/nhà phân tích có thật ở trên được giữ lại như một
+# ĐĂNG BẠ — họ tồn tại, và chỗ cắm nguồn có bản quyền nằm ở đó — nhưng chừng nào
+# chưa nối được nguồn thì họ không phát ra tín hiệu nào.
+DEFAULT_SIGNALS: list[ExpertSignalSeed] = []
 
 
 def compute_signal_score(
@@ -131,10 +104,18 @@ def compute_signal_score(
 
 
 class ExpertProvider:
-    """Returns seed sources/signals. Replace with a real RSS/API adapter later."""
+    """Đăng bạ nguồn + tín hiệu THẬT từ API công khai của FPL.
+
+    `DEFAULT_SOURCES` là danh sách các toà soạn/nhà phân tích có thật — họ tồn tại
+    và đây là chỗ cắm một nguồn có bản quyền — nhưng chừng nào chưa nối được thì họ
+    không phát tín hiệu nào. Tín hiệu đang chạy đến từ `providers/fpl_experts.py`.
+    """
 
     def get_sources(self) -> list[ExpertSourceSeed]:
-        return DEFAULT_SOURCES
+        from app.providers.fpl_experts import real_sources
+
+        return DEFAULT_SOURCES + real_sources()
 
     def get_signals(self) -> list[ExpertSignalSeed]:
+        """Rỗng — tín hiệu thật cần dữ liệu trực tiếp, xem `fpl_sync.sync_experts`."""
         return DEFAULT_SIGNALS

@@ -9,6 +9,7 @@ Returns per-player point distributions -> summary percentiles & tail probs.
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 import numpy as np
@@ -30,6 +31,21 @@ class MCPlayer:
     yellow90: float
     bonus_base: float       # expected bonus at full involvement
 
+
+# --------------------------------------------------------- xoay tua DGW -----
+# Tương quan giữa hai lần "đá chính" của CÙNG một cầu thủ trong CÙNG một vòng đôi.
+# Âm, vì huấn luyện viên xoay tua: đá trận 1 thì dễ được nghỉ trận 2, và ngược lại.
+#
+# Bản trước rút hai trận hoàn toàn độc lập (đo được tương quan +0.0003). Điều đó
+# **không sai ở kỳ vọng** — xP là tổng của hai kỳ vọng, và độc lập hay không thì
+# tổng đó không đổi — nhưng nó sai ở **phương sai**: độc lập cho
+# Var = 2p(1−p), còn tương quan âm cho Var = 2p(1−p)(1+ρ) < đó. Nghĩa là mô hình
+# cũ thổi phồng cả trần lẫn sàn của cầu thủ đá vòng đôi, tức thổi phồng đúng hai
+# con số mà quyết định Bench Boost và Triple Captain dựa vào.
+#
+# Giá trị này **không khớp được từ dữ liệu đang có** (DB chưa có vòng đôi nào đã
+# đá). Nó là hằng số cấu hình, đặt ở mức vừa phải; 0 đưa về hành vi cũ.
+ROTATION_RHO = -0.25
 
 # A single player may never be credited with more than this share of the pool,
 # however few team-mates are on the pitch alongside him.
@@ -106,6 +122,41 @@ def _allocate(
     return out
 
 
+def rotation_start_prob(
+    p_prev: float, p_now: float, rho: float
+) -> tuple[float, float]:
+    """(P đá chính | đã đá trận trước, P đá chính | đã nghỉ trận trước).
+
+    Dựng phân phối hai điểm giữ **nguyên vẹn biên duyên**: dù xoay tua mạnh đến
+    đâu, xác suất đá chính trận này cộng lại vẫn đúng bằng `p_now`, nên kỳ vọng —
+    tức xP — không đổi một chút nào. Chỉ phụ thuộc giữa hai trận là đổi.
+
+        Cov = ρ·√(p_prev(1−p_prev)·p_now(1−p_now))
+        P(đá | đã đá)    = p_now + Cov/p_prev
+        P(đá | đã nghỉ)  = p_now − Cov/(1−p_prev)
+
+    Kiểm tra: p_prev·P(đá|đã đá) + (1−p_prev)·P(đá|đã nghỉ) = p_now, đúng với mọi ρ.
+
+    **Giới hạn khả thi là tính năng, không phải khiếm khuyết.** Cả hai xác suất
+    phải nằm trong [0,1], nên |Cov| ≤ min(p_prev·p_now, (1−p_prev)(1−p_now)). Với
+    một trụ cột chắc suất (p = 0.95) điều đó giới hạn ρ ở −0.05: **không còn chỗ
+    nào để xoay**. Với một cầu thủ luân phiên (p = 0.6) nó cho phép tới −0.67. Đúng
+    thực tế, và có được miễn phí từ ràng buộc toán chứ không cần thêm tham số nào.
+    """
+    p_prev = min(max(p_prev, 0.0), 1.0)
+    p_now = min(max(p_now, 0.0), 1.0)
+    if p_prev <= 0.0 or p_prev >= 1.0 or p_now <= 0.0 or p_now >= 1.0 or rho == 0.0:
+        return p_now, p_now
+    sd = math.sqrt(p_prev * (1 - p_prev) * p_now * (1 - p_now))
+    cov = rho * sd
+    cov = max(cov, -min(p_prev * p_now, (1 - p_prev) * (1 - p_now)))
+    cov = min(cov, min(p_prev * (1 - p_now), (1 - p_prev) * p_now))
+    return (
+        min(max(p_now + cov / p_prev, 0.0), 1.0),
+        min(max(p_now - cov / (1 - p_prev), 0.0), 1.0),
+    )
+
+
 def simulate_fixture(
     players: list[MCPlayer],
     lam_for: float,
@@ -113,6 +164,11 @@ def simulate_fixture(
     n: int,
     rng: np.random.Generator,
     collect: dict[int, dict[str, float]] | None = None,
+    *,
+    prior_started: dict[int, np.ndarray] | None = None,
+    prior_p_start: dict[int, float] | None = None,
+    rotation_rho: float = ROTATION_RHO,
+    out_started: dict[int, np.ndarray] | None = None,
 ) -> dict[int, np.ndarray]:
     """Return {player_id: array[n] of points} for one fixture.
 
@@ -121,6 +177,12 @@ def simulate_fixture(
     `engine/xpoints.py`. Hai đường tính cùng một đại lượng nên lệch ở thành phần
     nào là lỗi ở đúng thành phần đó — không có bước này thì chỉ thấy tổng lệch mà
     không biết vì sao.
+
+    `prior_started` là mặt nạ "đã đá chính ở trận TRƯỚC của cùng vòng đấu này",
+    theo từng lần mô phỏng. Có nó thì xác suất đá chính trận này được điều chỉnh
+    theo từng lần mô phỏng để tạo ra xoay tua (xem `rotation_start_prob`); biên
+    duyên giữ nguyên nên xP không đổi, chỉ phương sai đổi. `out_started` nhận lại
+    mặt nạ của trận này để chuỗi được nối sang trận kế tiếp.
     """
     team_goals = rng.poisson(max(lam_for, 0.01), n)
     team_conceded = rng.poisson(max(lam_conceded, 0.01), n)
@@ -134,8 +196,17 @@ def simulate_fixture(
     reached60_by: dict[int, np.ndarray] = {}
     for p in players:
         r = rng.random(n)
-        st = r < p.p_start
-        sb = (r >= p.p_start) & (r < p.p_start + p.p_sub)
+
+        prev = prior_started.get(p.player_id) if prior_started else None
+        if prev is None:
+            p_start_arr = p.p_start
+        else:
+            p_prev = (prior_p_start or {}).get(p.player_id, p.p_start)
+            hi, lo = rotation_start_prob(p_prev, p.p_start, rotation_rho)
+            p_start_arr = np.where(prev, hi, lo)
+
+        st = r < p_start_arr
+        sb = (r >= p_start_arr) & (r < np.minimum(p_start_arr + p.p_sub, 1.0))
         started_by[p.player_id] = st
         subbed_by[p.player_id] = sb
         played_by[p.player_id] = st | sb
@@ -143,7 +214,15 @@ def simulate_fixture(
         # "đá đủ 60" nằm gọn trong tập "đá chính" — đúng quan hệ thực tế, và không
         # cần thêm một lần rút độc lập (rút riêng sẽ sinh ra người đá đủ 60 phút mà
         # không đá chính).
-        reached60_by[p.player_id] = r < min(p.p_60_plus, p.p_start)
+        #
+        # Khi có xoay tua, ngưỡng 60 phút phải dịch THEO TỶ LỆ với xác suất đá chính
+        # đã điều chỉnh: giữ nguyên tỷ lệ "đá chính thì trụ được 60 phút", chứ không
+        # để một cầu thủ được xoay vào lại có xác suất trụ 60 phút y như cũ.
+        ratio = min(p.p_60_plus, p.p_start) / p.p_start if p.p_start > 0 else 0.0
+        reached60_by[p.player_id] = r < (p_start_arr * ratio)
+
+    if out_started is not None:
+        out_started.update(started_by)
 
     # ---- share out the team's goals, then its assists ----
     order = [p.player_id for p in players]

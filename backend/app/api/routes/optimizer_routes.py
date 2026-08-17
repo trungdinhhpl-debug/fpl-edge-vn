@@ -20,7 +20,7 @@ from app.schemas import (
     WildcardRequest,
 )
 from app.services import team as team_svc
-from app.services.common import planning_start_gw
+from app.services.common import planning_start_gw, iso_utc
 
 router = APIRouter()
 
@@ -164,7 +164,7 @@ def get_optimization(run_id: int, db: Session = Depends(get_db)) -> dict:
     return {
         "run_id": run.id, "kind": run.kind, "start_gw": run.start_gw,
         "horizon": run.horizon, "model_version": run.model_version,
-        "created_at": run.created_at.isoformat() if run.created_at else None,
+        "created_at": iso_utc(run.created_at) if run.created_at else None,
         "params": json.loads(run.params_json) if run.params_json else None,
         "result": json.loads(run.result_json) if run.result_json else None,
     }

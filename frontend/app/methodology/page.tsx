@@ -196,6 +196,51 @@ export default function MethodologyPage() {
         ) : null}
 
         <Card>
+          <CardHeader><CardTitle>Độ khó lịch thi đấu — sáu bước</CardTitle></CardHeader>
+          <CardContent className="space-y-2 text-sm text-muted-foreground">
+            <ol className="list-inside list-decimal space-y-1">
+              <li>
+                <b>Prior đội bóng</b> gộp 5 nguồn có trọng số: 45% xG/xGA đã hiệu chỉnh
+                đối thủ, 25% thị trường/Elo, 15% chất lượng đội hình, 10% tính liên tục
+                của HLV, 5% dữ liệu tiền mùa. Nguồn nào <b>không có dữ liệu thì bị loại
+                khỏi mẫu số</b>, chứ không được mặc định bằng trung bình giải.
+              </li>
+              <li>
+                <b>λ dạng log cộng 10 số hạng</b>: nền giải, tấn công, hở hàng thủ đối
+                thủ, sân nhà, đội hình, ngày nghỉ, mật độ, chuyển nhượng, HLV, lên hạng.
+                λ bàn thua <b>không có công thức riêng</b> — nó là chính công thức trên
+                chạy ngược, nên hai chiều không thể lệch nhau.
+              </li>
+              <li>
+                <b>Ghép với kèo nhà cái bằng trung bình hình học</b> (không phải trung
+                bình cộng), trọng số theo số nhà cái và độ trưởng thành của thị trường.
+                Độ lệch hệ thống đo trên các trận <i>có</i> giá được áp cho <i>mọi</i>{" "}
+                trận — kể cả trận chưa ai ra giá.
+              </li>
+              <li>
+                <b>Độ dễ tính bằng percentile</b>, không phải phép co tuyến tính: độ dễ
+                ghi bàn, độ dễ sạch lưới, và độ dễ riêng cho <b>từng vai trò</b> — cùng
+                một trận không cùng độ khó cho thủ môn và tiền đạo.
+              </li>
+              <li>
+                <b>Điểm lịch cả cửa sổ</b>: trung bình có trọng số suy giảm theo thời
+                gian (nửa chu kỳ 4 vòng), trừ phạt bất định. Vòng trắng tính <b>0 điểm</b>{" "}
+                — không đá thì không có điểm, đó là sự thật chứ không phải dữ liệu thiếu.
+              </li>
+              <li>
+                <b>FDR 1–5 theo ngũ phân vị</b>: 20% dễ nhất là 1, 20% khó nhất là 5.
+              </li>
+            </ol>
+            <p className="rounded-md bg-caution/10 px-2.5 py-2 text-caution">
+              ⚠ Giới hạn: số hạng <b>mật độ thi đấu</b> hầu như luôn bằng 0 vì FPL API chỉ
+              công bố lịch Ngoại hạng — cúp châu Âu, cúp Liên đoàn và FA Cup, đúng những
+              giải tạo ra mật độ thật, không có trong dữ liệu. Hệ số ngày nghỉ và mật độ
+              cũng chưa khớp được từ dữ liệu, nên chúng cố ý nhỏ và bị chặn hai đầu.
+            </p>
+          </CardContent>
+        </Card>
+
+        <Card>
           <CardHeader><CardTitle>Monte Carlo — phân bổ bàn thắng</CardTitle></CardHeader>
           <CardContent className="space-y-2 text-sm text-muted-foreground">
             <p>Mô phỏng ở cấp <b>trận đấu của đội</b>: mỗi vòng lặp rút một lần tổng bàn thắng và tổng bàn thua, rồi mới chia cho cầu thủ — sạch lưới dùng chung cho GK + hậu vệ, bàn thắng rút từ chính tổng bàn đó.</p>
@@ -220,21 +265,43 @@ export default function MethodologyPage() {
               <b>xP không đến từ Monte Carlo</b> — xP tính giải tích; mô phỏng chỉ sinh ra
               ceiling, floor, P(haul), phương sai.
             </p>
+            <p>
+              <b>Penalty đã tách khỏi bóng sống.</b> FPL không cho{" "}
+              <code>penalties_scored</code> cũng không cho npxG, và{" "}
+              <code>penalties_missed</code> thì quá thưa để dùng ở cấp cầu thủ —{" "}
+              <b>15/20 người đá 11m số 1 hỏng đúng 0 quả</b>, còn người hỏng 2 quả thì
+              ước ra 70% xG cả mùa là penalty. Nên tỷ lệ được đo ở <b>cấp giải</b> (14
+              quả hỏng trên 760 trận-đội → 0,069 bàn/trận-đội), còn ai đá thì đọc từ{" "}
+              <code>penalties_order</code>. Phần 11m <b>không co giãn theo độ khó trận
+              mạnh như bóng sống</b> — một quả 11m đáng 0,79 bàn dù đối thủ là ai.
+            </p>
+            <p>
+              <b>Double Gameweek đã mô phỏng xoay tua và mệt mỏi.</b> Hai lần đá chính
+              giờ có tương quan âm, dựng bằng phân phối hai điểm{" "}
+              <b>giữ nguyên biên duyên</b> — nên xP không đổi một chút nào, chỉ phương
+              sai đổi (đo được −2,3% đến −5,5% độ lệch chuẩn). Giới hạn khả thi tự chặn
+              theo mức chắc suất: trụ cột 95% gần như không xoay được, cầu thủ luân phiên
+              60% thì xoay mạnh. Trận thứ hai còn bị trừ phút theo số ngày nghỉ.
+            </p>
             <details className="rounded-md border p-2">
               <summary className="cursor-pointer text-xs font-medium text-foreground">
-                Còn lại 2 giới hạn chưa xử lý
+                Ba hệ số chưa khớp được từ dữ liệu
               </summary>
               <ul className="mt-2 space-y-1.5 text-xs">
                 <li>
-                  <b>Penalty chưa tách riêng.</b> FPL cho <code>penalties_missed</code> nhưng
-                  không cho <code>penalties_scored</code> và không cho npxG, nên không tách
-                  được phần xG từ chấm 11m mà không áp một giả định trung bình giải cho mọi
-                  người đá 11m. Upside riêng của họ vẫn hoà trong share bóng sống.
+                  <b>Độ co giãn của penalty theo độ khó trận (0,5).</b> 14 quả hỏng cả giải
+                  là quá ít để hồi quy số 11m theo sức mạnh tấn công. Hai đầu mút đều có
+                  nghĩa (0 = không phụ thuộc đối thủ, 1 = như bóng sống) nên chỉnh nó không
+                  bao giờ tạo ra trạng thái vô lý.
                 </li>
                 <li>
-                  <b>Double Gameweek không mô phỏng rotation.</b> Hai trận rút độc lập (tương
-                  quan +0,0003) → có biến động xoay tua, nhưng không biểu diễn &ldquo;nghỉ
-                  trận 1 nên dễ đá trận 2&rdquo; và không có yếu tố mệt mỏi.
+                  <b>Tương quan xoay tua (−0,25).</b> DB chưa có vòng đôi nào đã đá để khớp.
+                  Đặt 0 là quay về hành vi cũ.
+                </li>
+                <li>
+                  <b>Tỷ lệ vào bóng của chấm 11m (79%).</b> API cho số quả hỏng nhưng không
+                  cho số quả vào, nên không có mẫu số. Sai 2 điểm phần trăm ở đây làm lệch
+                  khoảng 0,5% tổng bàn của một đội.
                 </li>
               </ul>
             </details>

@@ -18,6 +18,7 @@ from app.services.common import (
     player_public,
     projections_for_gw,
     team_lookup,
+    iso_utc,
 )
 
 
@@ -145,7 +146,7 @@ def player_scorecard(db: Session, player_id: int, gw: int | None = None) -> dict
             "label": None if not xm else xm.confidence,
             "model_version": None if not proj else proj.model_version,
             "data_cutoff": (
-                proj.data_cutoff.isoformat() if proj and proj.data_cutoff else None
+                iso_utc(proj.data_cutoff) if proj and proj.data_cutoff else None
             ),
         },
     }

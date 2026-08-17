@@ -34,7 +34,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import Gameweek, InjuryReport, Player, PlayerProjection
-from app.services.common import player_public, team_lookup
+from app.services.common import player_public, team_lookup, iso_utc
 
 HIT_COST = 4
 # FPL runs price changes once a day, ~01:30 UK time. Stated in UK time because
@@ -421,7 +421,7 @@ def _branches(ctx: _Ctx, weeks: list[dict], bank: int,
                     "action": {
                         "label": (f"Thực hiện {_label(ctx, [pr])} sớm — trước lần đổi "
                                   f"giá kế tiếp (~{PRICE_CHANGE_TIME_UK} giờ Anh hằng đêm)"),
-                        "deadline": deadline.isoformat() if deadline else None,
+                        "deadline": iso_utc(deadline) if deadline else None,
                         "price_change_time_uk": PRICE_CHANGE_TIME_UK,
                         "tradeoff": ("Đổi lại mất phần free transfer đang tích — chỉ nên "
                                      "làm nếu 0.1tr giá trị đội đáng hơn con số ở nhánh chính."),
@@ -443,7 +443,7 @@ def _branches(ctx: _Ctx, weeks: list[dict], bank: int,
                     "caveat": pressure["caveat"],
                     "action": {
                         "label": f"Bán {nm} sớm để giữ giá trị đội",
-                        "deadline": deadline.isoformat() if deadline else None,
+                        "deadline": iso_utc(deadline) if deadline else None,
                         "tradeoff": ("Bán sớm nghĩa là mất số xP mà kế hoạch chính còn "
                                      "trông vào cầu thủ này ở các vòng trước GW"
                                      f"{t}."),
@@ -467,7 +467,7 @@ def build_decision_tree(db: Session, plan: dict, gws: list[int], bank: int,
         rolling = not pairs
         main_line.append({
             "gameweek": w["gameweek"],
-            "deadline": deadline.isoformat() if deadline else None,
+            "deadline": iso_utc(deadline) if deadline else None,
             "action": "roll" if rolling else ("transfer_with_hit" if w["hits"] else "transfer"),
             "label": _label(ctx, pairs),
             "moves": [

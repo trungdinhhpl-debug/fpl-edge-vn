@@ -10,8 +10,8 @@ from app.models import Fixture, Team
 from app.schemas import ChatRequest
 from app.services.captains import captain_ranking, compare_captains
 from app.services.chat import answer_question
-from app.services.common import planning_start_gw, team_lookup
-from app.services.fixtures import fixture_ticker
+from app.services.common import planning_start_gw, team_lookup, iso_utc
+from app.services.fixtures import explain_fixture, fixture_ticker
 from app.services.gameweek import dashboard, gameweek_status
 from app.services.experts import expert_consensus
 from app.services.news import news_centre, news_feed
@@ -95,7 +95,7 @@ def get_fixtures(event: int | None = None, db: Session = Depends(get_db)) -> dic
     return {"fixtures": [
         {
             "id": f.id, "event": f.event,
-            "kickoff_time": f.kickoff_time.isoformat() if f.kickoff_time else None,
+            "kickoff_time": iso_utc(f.kickoff_time) if f.kickoff_time else None,
             "home": teams.get(f.team_h).short_name if f.team_h in teams else "?",
             "away": teams.get(f.team_a).short_name if f.team_a in teams else "?",
             "home_id": f.team_h, "away_id": f.team_a,
@@ -111,6 +111,26 @@ def get_fixtures(event: int | None = None, db: Session = Depends(get_db)) -> dic
 def get_ticker(start_gw: int | None = None, n_gws: int = Query(8, le=12),
                db: Session = Depends(get_db)) -> dict:
     return fixture_ticker(db, start_gw, n_gws)
+
+
+@router.get("/fixtures/explain")
+def get_fixture_explain(
+    team_id: int,
+    opponent_id: int,
+    is_home: bool = True,
+    fixture_id: int | None = None,
+    db: Session = Depends(get_db),
+) -> dict:
+    """Phân rã λ của một trận: prior 5 nguồn (BƯỚC 1) + 10 số hạng log (BƯỚC 2+3).
+
+    Con số duy nhất người dùng thấy trên bảng lịch là một bậc FDR; endpoint này là
+    đường đi ngược từ bậc đó về từng mảnh bằng chứng đã tạo ra nó.
+    """
+    teams = team_lookup(db)
+    for tid in (team_id, opponent_id):
+        if tid not in teams:
+            raise HTTPException(404, f"Không có đội id={tid}")
+    return explain_fixture(db, team_id, opponent_id, is_home, fixture_id)
 
 
 @router.get("/captains")

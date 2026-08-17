@@ -15,12 +15,31 @@ from dataclasses import dataclass, field
 from app import bps_rules as bps_mod
 from app import scoring as scoring_mod
 from app.engine import bonus as bonus_mod
+from app.engine import penalties as pen_mod
 from app.scoring import RULES
 
 # per-90 position priors (league-ish) used for shrinkage of small samples
 PRIOR_XG90 = {1: 0.0, 2: 0.05, 3: 0.15, 4: 0.35}
 PRIOR_XA90 = {1: 0.0, 2: 0.06, 3: 0.14, 4: 0.12}
 PRIOR_DC90 = {1: 0.0, 2: 8.0, 3: 6.0, 4: 3.0}   # defensive contribution actions/90
+
+# Bốn prior dưới đây là **trung vị đo trên chính dữ liệu FPL** của nhóm đá từ 900
+# phút (GK n=19, DEF n=98, MID n=126, FWD n=24), không phải số chọn tay.
+#
+# Vì sao chúng phải tồn tại: mọi tỷ lệ per-90 ở đây có dạng `tổng_mùa / (phút/90)`,
+# nên với cỡ mẫu bé nó nổ. Một cầu thủ trẻ **đá đúng 1 phút và có 3 BPS** cho ra
+# `bps90 = 270` — trong khi người dẫn đầu giải thật sự chỉ ở mức 29.6. Đưa số đó
+# vào `standalone_bonus`, vốn có số mũ 1.99, thì anh ta nhận **1.91 điểm bonus mỗi
+# trận** trong khi Gabriel (đá chính, 724 BPS cả mùa) nhận 0.41 — gấp 4.6 lần.
+# `xg90`/`xa90`/`dc90` vốn đã được `_shrink()` bảo vệ; bốn tỷ lệ này thì chưa, và
+# đó là toàn bộ khác biệt.
+PRIOR_BPS90 = {1: 15.0, 2: 14.9, 3: 18.0, 4: 19.2}
+PRIOR_SAVES90 = {1: 2.86, 2: 0.0, 3: 0.0, 4: 0.0}
+PRIOR_YC90 = {1: 0.075, 2: 0.172, 3: 0.174, 4: 0.127}
+# Thẻ đỏ: trung vị của cả bốn vị trí đều bằng 0 (thẻ đỏ quá hiếm để trung vị bắt
+# được). Prior 0 ở đây là con số ĐO ĐƯỢC, không phải chỗ trống chưa điền.
+PRIOR_RC90 = {1: 0.0, 2: 0.0, 3: 0.0, 4: 0.0}
+
 SHRINK_MINUTES = 540.0   # ~6 full matches before season data dominates prior
 
 
@@ -106,6 +125,13 @@ def expected_points(
     # sức mạnh đội. 1.0 = không chuẩn hoá (gọi lẻ, không có ngữ cảnh cả đội).
     team_goal_scale: float = 1.0,
     penalties_order: int | None,
+    # Tỷ lệ bàn từ chấm 11m của MỘT đội trong MỘT trận, đo ở cấp giải vì cấp cầu
+    # thủ không đủ mẫu. 0.0 = tắt hẳn phép tách penalty (hành vi trước đây, trừ
+    # `pen_bump` vốn đã bị bỏ vì đếm hai lần).
+    penalty_rate: float = 0.0,
+    # Xác suất người đá 11m SỐ 1 của đội có mặt trên sân. Chỉ cần cho người số 2:
+    # anh ta chỉ đá khi người số 1 vắng. None = suy từ chính cầu thủ đang tính.
+    lead_taker_on_pitch: float | None = None,
     # from xMins model
     xmins: float,
     p_start: float,
@@ -125,9 +151,15 @@ def expected_points(
     xg90 = _shrink(xg_season / mins90, PRIOR_XG90.get(pos, 0.1), minutes_season)
     xa90 = _shrink(xa_season / mins90, PRIOR_XA90.get(pos, 0.1), minutes_season)
     dc90 = _shrink(dc_season / mins90, PRIOR_DC90.get(pos, 4.0), minutes_season)
-    saves90 = (saves_season / mins90) if pos == 1 else 0.0
-    yc90 = yellow_season / mins90
-    rc90 = red_season / mins90
+    # Bốn tỷ lệ này cũng phải co giãn theo cỡ mẫu như ba tỷ lệ trên. Không co giãn
+    # thì `tổng_mùa / (phút/90)` nổ ở mẫu bé — xem chú thích ở PRIOR_BPS90.
+    saves90 = (
+        _shrink(saves_season / mins90, PRIOR_SAVES90.get(pos, 0.0), minutes_season)
+        if pos == 1
+        else 0.0
+    )
+    yc90 = _shrink(yellow_season / mins90, PRIOR_YC90.get(pos, 0.15), minutes_season)
+    rc90 = _shrink(red_season / mins90, PRIOR_RC90.get(pos, 0.0), minutes_season)
 
     # fixture difficulty adjustment: scale attacking output by how this fixture's
     # expected team goals compares to the team's season average
@@ -137,12 +169,22 @@ def expected_points(
 
     minutes_frac = xmins / 90.0  # already includes DGW multiplier via xmins
 
-    # penalty responsibility bump (penalty taker gets extra goal threat)
-    pen_bump = 1.0
-    if penalties_order == 1:
-        pen_bump = 1.12
-    elif penalties_order == 2:
-        pen_bump = 1.04
+    # ---- chấm 11m tách khỏi bóng sống (xem app/engine/penalties.py) -----------
+    # `pen_bump` cũ nhân thêm 12% cho người đá 11m số 1 và **đếm hai lần**: những
+    # quả 11m anh ta đã đá vốn đã nằm trong `expected_goals` mà FPL phát ra. Giờ
+    # phần penalty được TRỪ khỏi nền lịch sử rồi CỘNG LẠI như một thành phần riêng,
+    # với độ co giãn theo độ khó trận thấp hơn — một quả 11m đáng 0.79 bàn dù đối
+    # thủ là ai, nó không co lại khi gặp Man City như một pha dứt điểm bóng sống.
+    # MỘT con số cho cả hai chiều: trừ khỏi nền lịch sử, rồi cộng lại như thành
+    # phần riêng. Tính riêng mỗi phía một kiểu thì phần thừa/thiếu sẽ lặng lẽ chui
+    # vào xG bóng sống.
+    pen_rate90 = pen_mod.penalty_xg90(
+        rate_per_team_match=penalty_rate,
+        penalties_order=penalties_order,
+        lead_taker_on_pitch=lead_taker_on_pitch,
+    )
+    xg90_open, pen_xg90 = pen_mod.split_open_play(xg90, pen_rate90)
+    exp_pen_goals = pen_mod.fixture_scaled_penalty(pen_xg90, minutes_frac, fixture_adj)
 
     # ---- component EVs ----
     # Bàn thắng trong một trận là đại lượng BẢO TOÀN: tổng của cả đội phải bằng số
@@ -153,7 +195,12 @@ def expected_points(
     # hệ thống. `team_goal_scale` do projections.py tính cho từng trận để đóng lại
     # khoảng đó; Monte Carlo vốn đã bảo toàn (nó chia đúng tổng bàn đã rút), nên đây
     # cũng là chỗ hai đường tính lệch nhau.
-    exp_goals = xg90 * minutes_frac * fixture_adj * pen_bump * team_goal_scale
+    # Phần bóng sống co giãn đầy đủ theo độ khó trận; phần 11m đã co giãn yếu hơn
+    # ở trên và KHÔNG nhân `minutes_frac` lần nữa (nó vốn đã tính theo xác suất có
+    # mặt trên sân). Cả hai vẫn đi qua `team_goal_scale` để tổng của đội khớp λ.
+    exp_goals = (
+        xg90_open * minutes_frac * fixture_adj + exp_pen_goals
+    ) * team_goal_scale
     exp_assists = xa90 * minutes_frac * fixture_adj * team_goal_scale
 
     goal_ev = exp_goals * rules.goal_points.get(pos, 4)
@@ -208,7 +255,9 @@ def expected_points(
         from_rules=bps_mod.for_season(stats_season) if stats_season else active_bps,
         to_rules=active_bps,
     )
-    bps90 = bps_effective / mins90
+    bps90 = _shrink(
+        bps_effective / mins90, PRIOR_BPS90.get(pos, 16.0), minutes_season
+    )
 
     # Bonus là quỹ CỐ ĐỊNH 6 điểm mỗi trận chia cho 3 người có BPS cao nhất, nên
     # nó không tính được từ một cầu thủ đứng riêng. `bonus_override` là suất đã
@@ -262,6 +311,8 @@ def expected_points(
             # thay vì tính lại ở projections.py: hai bản sao của cùng phép tính là
             # hai chỗ có thể lệch nhau về sau.
             "bps90": round(bps90, 3),
+            "xg90_open": round(xg90_open, 4),
+            "exp_pen_goals": round(exp_pen_goals * team_goal_scale, 4),
             "exp_goals": round(exp_goals, 4),
             "exp_assists": round(exp_assists, 4),
             "cs_prob": round(cs_prob, 4),

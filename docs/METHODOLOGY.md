@@ -36,6 +36,19 @@ averages" và báo 64% trong tuần chưa đá trận nào; nó bỏ sót cầu 
 hạng và cầu thủ đang dính cờ chấn thương, vốn cũng hoàn toàn là prior. Đếm phần
 bù cho ra **100%**, là con số đúng.
 
+**Nhãn tin cậy của TỪNG cầu thủ phải nói cùng một điều với nhãn của cả hệ thống.**
+`risk.confidence_from` từng cộng +0.1 cho "mẫu lớn" khi `minutes_season > 900` —
+nhưng trước vòng 1 đó là tổng phút của mùa **trước**, nên phần thưởng được trao cho
+một mẫu chưa hề tồn tại. Đo được: 241 cầu thủ nằm đúng ở 0.70 và giao diện gắn
+**"Tin cậy: Cao"** cho toàn bộ nhóm ứng viên đội trưởng — ngay cạnh tấm banner của
+chính hệ thống ghi *"PRE-SEASON · 100% dựa trên prior · Confidence: Low"*. Hai con
+số cùng một trang nói ngược nhau, và người dùng đọc cái nằm cạnh cầu thủ.
+
+Giờ phần thưởng cỡ mẫu phải kiếm được **trong mùa này** (`team_matches_played > 0`),
+còn hình phạt mẫu bé thì giữ nguyên — một cầu thủ ít phút mùa trước vẫn thật sự là
+ẩn số lớn hơn. Và khi chưa quả bóng nào lăn, độ tin cậy bị chặn dưới ngưỡng "Cao".
+Kết quả sau khi sửa: 375 "Trung bình", 192 "Thấp", **0 "Cao"**.
+
 ### Giảm trọng số dữ liệu mùa trước
 
 Với `prior_reliability = r`, phần `(1 − r)` số trận mùa trước được **thay bằng
@@ -151,6 +164,109 @@ chứ không bịa số. Nghĩa là phần bù cho thủ môn và cầu thủ ha
 Không quy đổi khi vòng 1 đã có trận kết thúc: từ lúc đó tổng cả-mùa là số của mùa
 này, kiếm theo đúng luật đang áp (`services/season_state.stats_season()`).
 
+### 2e. Chấm 11m tách khỏi bóng sống (`engine/penalties.py`)
+
+**Hai lỗi trong bản cũ.** `expected_goals` mà FPL phát là xG **tổng**, gồm cả chấm
+11m, và không có `penalties_scored` cũng không có npxG. Hệ quả:
+
+1. `fixture_adj = λ_for(trận)/nền_giải` co giãn **toàn bộ** xG theo độ khó trận.
+   Nhưng một quả 11m đáng 0,79 bàn dù đối thủ là ai — nó không co lại khi gặp Man
+   City theo cách một pha dứt điểm bóng sống co lại.
+2. `pen_bump` nhân thêm 12% cho người đá 11m số 1 — **đếm hai lần**, vì những quả
+   anh ta đã đá vốn đã nằm sẵn trong `expected_goals` của chính anh ta.
+
+**Vì sao KHÔNG tách theo từng cầu thủ.** Dấu vết duy nhất là `penalties_missed`, và
+đo trên dữ liệu thật thì nó vô dụng ở cấp cá nhân:
+
+| | đo được |
+|---|---|
+| Người đá 11m số 1 hỏng **đúng 0 quả** | **15/20** → ước ra 0 quả đã đá |
+| B.Fernandes hỏng 2 quả | ước ra 9,5 quả = **70% xG cả mùa** là penalty |
+
+Chia một biến đếm nguyên 0/1/2 cho `1 − 0,79` khuếch đại nhiễu thành một ước lượng
+vô nghĩa. Ghi chú giới hạn cũ nói đúng ở điểm này.
+
+**Tách ở tầng có đủ mẫu.** 14 quả hỏng của cả giải trên 760 trận-đội là mẫu dùng
+được, nên **tỷ lệ** suy ở cấp giải; **ai đá** thì đọc từ `penalties_order` — dữ liệu
+FPL công bố thật; **có mặt hay không** lấy thẳng từ mô hình phút. Người số 2 chỉ
+nhận phần `1 − P(số 1 có mặt)`, nên không cần một tỷ lệ chia bịa ra.
+
+```
+14 quả hỏng / (1 − 0,79) = 67 quả đã đá → 53 bàn / 760 trận-đội = 0,069 bàn/trận-đội
+```
+
+Tỷ lệ này **tính tại chỗ từ DB**, không ghi cứng — mùa sau khác thì nó tự đổi.
+
+**Một con số dùng cho cả hai chiều.** `penalty_xg90()` cho ra xG 11m trên 90 phút
+có mặt; nó vừa bị **trừ** khỏi nền lịch sử vừa được **cộng lại** như thành phần
+riêng. Tính riêng mỗi phía một kiểu thì phần thừa/thiếu sẽ lặng lẽ chui vào xG bóng
+sống.
+
+**Một lỗi đã tạo ra rồi sửa trong chính lần này.** Bản đầu chặn phần trừ ở 45% xG,
+lập luận là "bảo vệ người MỚI nhận vai đá 11m". Lập luận sai chiều, và đo được ngay:
+Robinson (Fulham, hậu vệ đá 11m, xg90 = 0,065) chỉ bị trừ 0,029 nhưng vẫn được cộng
+lại 0,069 — **phồng 62% mối đe doạ ghi bàn từ không khí**, +1,57 xP/8 vòng. Bất đối
+xứng thật nằm chỗ khác: với người xG thấp, trừ quá tay gần như vô hại (trừ X rồi
+cộng lại xấp xỉ X), còn trừ thiếu thì thổi phồng. Chặn ở chính `xg90` đưa Robinson
+về đúng 12,5 — giá trị trước khi động vào.
+
+**Tác động đo được** (8 vòng, sau khi dựng lại toàn bộ dự báo):
+
+| Nhóm | n | Đổi trung bình | Khoảng |
+|---|---|---|---|
+| Đá 11m số 1 | 19 | **−0,34 xP** | −1,56 … +0,01 |
+| Đá 11m số 2 | 19 | −0,64 xP | −2,04 … +0,07 |
+| Không đá 11m | 408 | +0,06 xP | +0,00 … +0,46 |
+
+Không một người đá 11m nào tăng — đúng như phải thế khi bỏ một khoản đếm hai lần.
+Nhóm không đá 11m nhích lên chút vì bảo toàn bàn thắng: đội vẫn ghi đúng λ, nên
+phần bị lấy khỏi người đá 11m chuyển sang đồng đội.
+
+### 2f. Vòng đôi: xoay tua và mệt mỏi
+
+Bản cũ rút hai trận **hoàn toàn độc lập** (đo được tương quan +0,0003). Điều đó
+không sai ở kỳ vọng — xP là tổng hai kỳ vọng, độc lập hay không thì tổng không đổi
+— nhưng sai ở **phương sai**: `Var = 2p(1−p)` với độc lập, còn `2p(1−p)(1+ρ)` với
+tương quan âm. Mô hình cũ vì thế thổi phồng cả **trần lẫn sàn** của cầu thủ vòng
+đôi, tức thổi phồng đúng hai con số mà Bench Boost và Triple Captain dựa vào.
+
+Hai kênh tách bạch, nên cộng vào không phải đếm hai lần:
+
+* **Mệt mỏi** dịch **kỳ vọng**. Trận thứ hai bị trừ phút theo số ngày nghỉ (đủ 4
+  ngày = không trừ; sàn 0,85). Phút mất đi từ suất đá chính chuyển một phần sang
+  suất vào sân từ ghế — người bị rút sớm hiếm khi vắng mặt hẳn. Áp cho **cả** đường
+  giải tích lẫn Monte Carlo qua cùng một `est`.
+* **Xoay tua** dịch **phương sai**, và giữ nguyên kỳ vọng theo cấu tạo:
+
+```
+Cov = ρ·√(p₁(1−p₁)·p₂(1−p₂))
+P(đá trận 2 | đã đá trận 1)   = p₂ + Cov/p₁
+P(đá trận 2 | đã nghỉ trận 1) = p₂ − Cov/(1−p₁)
+```
+
+Cộng lại theo `p₁` luôn ra đúng `p₂` với **mọi** ρ, nên xP không đổi một chút nào.
+
+**Giới hạn khả thi là tính năng, không phải khiếm khuyết.** Cả hai xác suất phải nằm
+trong [0,1], nên `|Cov| ≤ min(p₁p₂, (1−p₁)(1−p₂))`. Với trụ cột chắc suất 95% điều
+đó chặn khoảng cách ở 0,053 — **không còn chỗ nào để xoay**. Haaland không bị xoay
+tua, và điều đó rơi ra từ ràng buộc toán chứ không cần thêm tham số.
+
+Đo trên 200 000 lần mô phỏng:
+
+| p_start | khoảng xoay khả thi | TB độc lập → xoay tua | SD độc lập → xoay tua |
+|---|---|---|---|
+| 0,95 | −0,053 | 10,06 → 10,07 | 5,364 → 5,382 (**+0,3%**) |
+| 0,80 | −0,250 | 8,56 → 8,54 | 5,671 → 5,543 (−2,3%) |
+| 0,60 | −0,250 | 6,65 → 6,64 | 5,765 → 5,499 (−4,6%) |
+| 0,40 | −0,250 | 4,79 → 4,77 | 5,238 → 4,950 (−5,5%) |
+
+Kỳ vọng đứng yên trong nhiễu; phương sai co lại đúng ở nhóm bị xoay.
+
+**Ba hệ số chưa khớp được từ dữ liệu**, và được đối xử như mọi hệ số khác trong hệ
+thống này — nhỏ, có chặn, cấu hình được, và hai đầu mút đều có nghĩa: độ co giãn của
+penalty theo độ khó trận (0,5), tương quan xoay tua (−0,25), tỷ lệ vào bóng của chấm
+11m (79%, API cho số quả hỏng nhưng không cho số quả vào nên không có mẫu số).
+
 ### 2b-bis. Hai đường tính phải nói cùng một điều
 
 xP được tính **giải tích** (`engine/xpoints.py`) còn phân phối đến từ **Monte
@@ -254,9 +370,8 @@ Tác động lên xP: cầu thủ dự kiến đá chính (xMins ≥ 60) tăng t
 điểm mỗi vòng — thủ môn +0.196, hậu vệ +0.139, tiền vệ +0.233, **tiền đạo +0.591**.
 Thứ tự gần như không đổi: top-20 theo tổng xP 8 vòng giữ lại 19/20 người.
 
-`λ_team_goals` và `λ_conceded` từ mô hình sức mạnh đội (`team_strength.py`):
-kết hợp strength ratings của FPL với xG/xGA thực nghiệm, blend theo số trận đã đá
-(shrinkage), có điều chỉnh sân nhà/khách (Poisson).
+`λ_team_goals` và `λ_conceded` từ mô hình sức mạnh đội — xem **mục 2d** bên dưới
+cho toàn bộ đường đi từ prior đội bóng tới FDR của một ô lịch.
 
 ### 2a-bis. Sức mạnh đội trước vòng 1 — hai lỗi đã sửa
 
@@ -378,6 +493,281 @@ Vài điểm cần biết:
   `expert_track_record` đang làm cho các nguồn chuyên gia.
 - Sai số khớp cuối cùng được ghi vào log đồng bộ. Sai số lớn nghĩa là ba thị
   trường mâu thuẫn nhau nhiều hơn mức một mô hình tỷ số có thể dung hòa.
+
+## 2d. Độ khó lịch thi đấu — sáu bước
+
+Toàn bộ phần lịch chạy qua sáu bước, mỗi bước một file:
+
+| Bước | Việc | File |
+|------|------|------|
+| 1 | Prior đội bóng, gộp 5 nguồn có trọng số | `engine/prior_strength.py` |
+| 2 | `log λ` cộng 10 số hạng | `engine/team_strength.py` |
+| 3 | Hiệu chuẩn & blend theo thị trường | `engine/team_strength.py` |
+| 4 | Percentile: Attack / Defence / Role Ease | `engine/fixture_difficulty.py` |
+| 5 | Schedule Ease cả cửa sổ | `engine/fixture_difficulty.py` |
+| 6 | FDR 1–5 theo ngũ phân vị | `engine/fixture_difficulty.py` |
+
+Đường đi ngược lại — từ một bậc FDR về từng mảnh bằng chứng đã tạo ra nó — mở
+bằng `GET /api/fixtures/explain?team_id=..&opponent_id=..&is_home=..`.
+
+### BƯỚC 1 — prior đầu mùa (`prior_strength.py`)
+
+```
+PriorStrength = 45% opponent-adjusted competitive xG/xGA
+              + 25% market / Elo strength
+              + 15% squad-quality
+              + 10% manager / system continuity
+              +  5% quality-adjusted preseason underlying data
+```
+
+Hai quyết định định hình cả module:
+
+**Gộp trong không gian log.** Kết quả của BƯỚC 1 đi thẳng vào BƯỚC 2 làm số hạng
+cộng của `log λ`. Trộn tuyến tính ở đây rồi lấy log ở kia thì "45%" không còn là
+45% của thứ mô hình thực sự dùng.
+
+**Trọng số được chuẩn hoá lại theo nguồn thật sự có.** Không nguồn nào được phép
+mặc định bằng trung bình giải để giữ nguyên mẫu số — làm vậy là lén kéo mọi đội về
+giữa rồi vẫn khai là đã dùng đủ năm nguồn. `TeamPrior.evidence_weight` là tổng
+trọng số đã vào (1.0 = đủ cả năm), và BƯỚC 5 phạt chính con số đó.
+
+Trạng thái thật của từng nguồn, tính theo dữ liệu FPL API cấp:
+
+| Nguồn | Trước vòng 1 | Trong mùa |
+|-------|--------------|-----------|
+| xG/xGA | có, **chưa** hiệu chỉnh đối thủ | có, hiệu chỉnh bằng IPF |
+| market / Elo | Elo thay thế (strength ratings, rỗng trước vòng 1) | kèo nếu đủ dày, không thì Elo |
+| squad quality | có (định giá FPL) | có |
+| manager continuity | có (danh sách khai tay) | có |
+| preseason underlying | **chỉ** đội mới lên hạng (Championship) | nhạt dần rồi tắt |
+
+- **Hiệu chỉnh đối thủ** dùng lặp tỉ lệ (IPF) trên `value ≈ base · att[i] · weak[j] · h^±1`,
+  nguyên liệu là xG **theo từng trận** từ `player_gameweek_stats`. Cần tối thiểu 4
+  trận mỗi đội; dưới mức đó hàm trả `None` thay vì trả một nghiệm mà dữ liệu không
+  xác định (40 tham số không khớp được bằng 10 quan sát).
+- **Kèo chỉ vào BƯỚC 1 khi đủ dày.** Kèo thường chỉ phủ 1–2 vòng tới. Khi mỏng, nó
+  vẫn được dùng — nhưng ở BƯỚC 3, đúng chỗ mà chỉ trận có giá được hưởng.
+- **Squad quality đo bằng định giá FPL**, vì FPL định giá lại toàn bộ đội hình mỗi
+  hè và giá đó đã nuốt vào cả chuyển nhượng đến lẫn đi. API **không** công bố lịch
+  sử chuyển nhượng nên không thể lấy hiệu đội hình năm nay trừ năm ngoái. Độ dốc
+  giá→sản lượng được **khớp tại chỗ** trên chính 20 đội trong DB, và khớp **riêng**
+  cho công và thủ: đo được công 1.91, thủ 1.24 — dùng chung một độ dốc thì vế thủ
+  bị ép theo hệ số của vế công và chỉ số phòng ngự nhóm đầu bảng chạm trần 1.70.
+  Đội mới lên hạng bị loại khỏi *phép khớp* (không khỏi kết quả): xG Ngoại hạng của
+  họ bằng ~0 vì mùa trước đá giải khác, và để lại thì đúng một điểm đó lái độ dốc
+  lên 3.54, tức hồi quy đang học "đội mới lên hạng thì rẻ".
+- **Manager continuity không mang hướng.** Đổi HLV không phải bằng chứng đội yếu
+  đi, mà là bằng chứng dữ liệu cũ mô tả đội hiện tại kém đi. Nên nó chuyển
+  `45% × (1 − 0.6)` = 18 điểm phần trăm từ nguồn xG sang một cái neo ở trung bình
+  giải — cùng hệ số `prior_weight_new_manager` mà mô hình xMins dùng cho từng cầu
+  thủ của chính các CLB ấy. Giữ nguyên HLV thì thành phần này **đồng ý với phần
+  còn lại**, nên nó được cộng vào tổng bằng chứng mà không dịch con số: 10% của
+  đặc tả được giữ đúng, mà không lén chính quy hoá cả 20 đội về 1.0.
+- **Preseason: 17/20 đội không có.** FPL API không có giao hữu tiền mùa — không
+  xG, không đội hình, không kết quả. Nguồn này được ghi là *không tồn tại* chứ
+  không được bịa; 5% của nó chia lại cho bốn nguồn kia. Với ba đội mới lên hạng thì
+  có một thứ đúng nghĩa "underlying data từ giải khác, đã hiệu chỉnh chất lượng":
+  thành tích Championship, hiệu chỉnh bằng số mũ `damping`, trần 1.0, nhạt dần sau
+  5 trận Ngoại hạng thật.
+- **Co giãn theo cỡ mẫu** (`index^w`, `w = phút/(phút+8000)` hoặc `trận/(trận+6)`):
+  sau vòng 1 một đội ghi 3 bàn có tỷ lệ xG gấp bốn lần trung bình giải; không co
+  giãn thì prior chạm trần và ô lịch của **mọi** đối thủ của họ đổi màu — từ một
+  trận.
+
+### BƯỚC 2 — `log λ` cộng 10 số hạng (`team_strength.py`)
+
+```
+log λ(A tấn công B, A sân nhà) =
+      log(nền giải)          ← khớp từ trận đã đá khi ≥40 trận, không thì 1.42
+    + sức tấn công của A      ← prior ⊕ dữ liệu trong mùa
+    + độ hở hàng thủ của B
+    + lợi thế sân nhà         ← khớp từ trận đã đá; MỘT hệ số, nhân/chia
+    + sức mạnh đội hình       ← (A sẵn sàng − B sẵn sàng)
+    + chênh lệch ngày nghỉ
+    + mật độ thi đấu
+    + điều chỉnh chuyển nhượng
+    + điều chỉnh HLV / hệ thống
+    + điều chỉnh đội mới lên hạng
+```
+
+**`λ_against` không có công thức riêng.** Nó là chính hàm trên gọi ngược:
+`λ_against(A) = λ(B tấn công A, B sân khách)`. Bản trước có hai nhánh song song cho
+hai chiều — hai nhánh song song là hai chỗ để lệch nhau, và đúng một lần lệch dấu
+lợi thế sân nhà là đủ hỏng cả bảng độ khó. Có test khoá đẳng thức này.
+
+**Lợi thế sân nhà là một hệ số**, nhân cho đội nhà và chia cho đội khách. Bản trước
+dùng hai hằng số rời (1.12 và 0.90) nên tích của chúng bằng 1.008 ≠ 1, và tổng số
+bàn của giải trôi theo tỷ lệ nhà/khách của lịch.
+
+Ba số hạng có dữ liệu thật, và ba số hạng thường bằng 0 — nói thẳng cái nào là cái
+nào, vì payload có ghi lý do cho từng số hạng bằng 0:
+
+| Số hạng | Nguồn | Độ lớn thực tế |
+|---------|-------|----------------|
+| đội hình | `status` + `chance_of_playing`, trọng số theo giá 11 người đắt nhất | tới ±10% λ |
+| ngày nghỉ | `kickoff_time`, chặn ở ±4 ngày, hệ số 0.010/ngày | đo được ±2.2% λ |
+| mật độ | số trận trong 14 ngày trước, quá 2 trận mới tính | **0 trong hầu hết trường hợp** |
+| chuyển nhượng | rút ngắn thời gian dữ liệu trong mùa lấn át prior | 0 trước vòng 1 |
+| HLV | như trên | 0 trước vòng 1 |
+| lên hạng | trần bằng trung bình giải khi chưa có phút Ngoại hạng | chỉ với đội mới lên |
+
+- **Mật độ gần như luôn bằng 0, và đó là giới hạn dữ liệu chứ không phải lựa chọn
+  mô hình.** FPL API **chỉ có lịch Ngoại hạng**. Cúp châu Âu, cúp Liên đoàn, FA Cup
+  — đúng những giải tạo ra mật độ thật — không nằm ở đâu trong dữ liệu này. Số hạng
+  chỉ kích hoạt được ở các vòng đá giữa tuần của chính Ngoại hạng.
+- **Hệ số ngày nghỉ và mật độ không khớp được từ dữ liệu trong DB** (trước vòng 1
+  không có trận nào; trong mùa thì 380 trận vẫn quá ít để tách hiệu ứng ngày nghỉ
+  khỏi chất lượng đội). Chúng được đặt cố ý nhỏ và chặn hai đầu, ở mức mà kể cả sai
+  hoàn toàn cũng không đảo được thứ tự độ khó. Đặt về 0 để tắt hẳn.
+- **Chuyển nhượng và HLV không dịch λ trực tiếp**, mà rút ngắn `K` trong
+  `w = trận/(trận+K)`: với CLB đổi HLV hay thay máu đội hình, mô tả cũ hết hạn sớm
+  hơn nên dữ liệu trong mùa lấn át prior nhanh hơn. Chúng được báo cáo dưới dạng
+  **hiệu số log λ** mà cơ chế đó gây ra, nên phân rã vẫn cộng đúng bằng `log λ`.
+- **Trần đội mới lên hạng**: CLB chưa có phút Ngoại hạng nào không được chấm trên
+  trung bình giải, bất kể các nguồn khác nói gì. Trần tự biến mất khi đội đó tích
+  đủ phút thật.
+
+### BƯỚC 3 — hiệu chuẩn theo thị trường
+
+```
+λ_cuối = λ_thị_trường^w · λ_cấu_trúc^(1−w)
+w      = trọng_số_gốc · min(1, số_nhà_cái/8) · độ_trưởng_thành
+```
+
+**Trung bình hình học, không phải số học.** Cả mô hình lẫn thị trường sống trong
+thang log — trộn số học ở đây là trộn ở một thang khác với thang đã dựng ra hai số
+đó. Hình học luôn ≤ số học, và có test khoá điều đó (nếu kết quả vượt trung bình
+cộng thì đã trộn nhầm thang).
+
+**Độ trưởng thành** là phần mới: giá của trận đá tuần này và giá của trận sau sáu
+tuần không đáng tin như nhau — trận xa có ít nhà cái treo bảng hơn, biên rộng hơn,
+và mọi tin đội hình sẽ làm giá chạy trước khi bóng lăn. Trong 10 ngày = trọng số
+đầy đủ, giảm tuyến tính xuống 0.45 ở mốc 45 ngày.
+
+**Và một bước mà "blend từng trận" không làm được: hiệu chuẩn toàn cục.** Độ lệch
+hệ thống giữa mô hình và thị trường được đo trên những trận **có** giá rồi áp cho
+**mọi** trận. Nếu mô hình nội bộ nóng hơn thị trường 7% ở các trận đã có bảng kèo,
+thì nó cũng đang nóng hơn 7% ở GW12 — dù GW12 chưa ai ra giá. Đây là chỗ thông tin
+thị trường lan sang phần lịch mà thị trường chưa chạm tới. Cần tối thiểu 6 trận có
+giá, và bị chặn ở ±18%: lệch hơn thế nghĩa là mô hình và thị trường bất đồng về bản
+chất, và ép khớp sẽ giấu bất đồng đó đi thay vì phơi nó ra. Đo trên dữ liệu hiện
+tại: hệ số **0.927** (mô hình nóng hơn thị trường 7.8%), phủ 20/160 ô.
+
+### BƯỚC 4 — percentile, không phải phép co tuyến tính
+
+```
+Attack Ease  = percentile(λ_for)
+Defence Ease = percentile( 4·P(sạch lưới) − trừ điểm thủng lưới )
+Role Ease    = percentile( điểm kỳ vọng của cầu thủ THAM CHIẾU ở vai trò đó )
+```
+
+Bản trước ánh xạ `λ ∈ [0.6, 2.6]` xuống thang 1–5 bằng một đoạn thẳng có hai đầu
+mút ghi cứng. Hai hệ quả: mùa nhiều bàn thì cả giải trôi về phía "dễ" vì hai đầu
+mút không đi theo; và khoảng giữa phân bố — nơi có phần lớn các trận — bị nén vào
+chưa tới một bậc. Percentile lấy chính phân bố của cửa sổ đang xem làm thước, nên
+"20% dễ nhất" luôn đúng nghĩa 20% dễ nhất.
+
+**Cả hai vế của Defence Ease đọc từ `RULES`**, không ghi cứng số 4: FPL đã từng đổi
+điểm sạch lưới. Khoản trừ tính theo **mốc trọn** (−1 mỗi 2 bàn), không theo `λ/2` —
+thủng đúng một bàn không mất điểm nào.
+
+**Role Ease giữ nguyên cầu thủ và chỉ đổi trận đấu.** Cầu thủ tham chiếu là trung
+vị của giải ở vai trò đó (trung vị chứ không phải trung bình: phân bố sản lượng
+lệch mạnh, một Haaland kéo trung bình tiền đạo lên khỏi mọi tiền đạo thật), đá
+chính chắc suất, chạy qua đúng `expected_points()` đang dùng cho cầu thủ thật.
+
+Ngưỡng "đá đều" để vào nhóm lấy trung vị là **tương đối** — 60% số phút của cầu thủ
+đá nhiều nhất giải, trần 900 phút. Một mốc 900 phút tuyệt đối nghĩa là suốt GW1–GW9
+không một ai đủ điều kiện và cả bốn vai trò rơi về prior, vì FPL reset thống kê mỗi
+mùa; đó đúng là lỗi mà mục 2a-bis đã sửa một lần cho ngưỡng "đội mới lên hạng".
+Ngưỡng tương đối lại cần một cái sàn của riêng nó: khi chưa ai đá phút nào thì
+`0.6 × 0` = 0, mọi cầu thủ "đủ điều kiện" với 0 phút, và cầu thủ tham chiếu được
+dựng từ toàn số 0 — nên chừng nào người đá nhiều nhất giải chưa qua 2 trận trọn vẹn
+thì vẫn dùng prior theo vị trí.
+`team_avg_gf` được đặt bằng **nền của giải** chứ không phải trung bình của đội —
+lấy trung bình của đội thì một trận λ 1.8 sẽ ra "dễ" cho đội yếu và "khó" cho đội
+mạnh, tức đo lại chính đội bóng, đúng thứ bước này cố ý loại ra.
+
+Vì sao cần Role Ease khi đã có hai cái kia: một trận `λ_for 1.9 / λ_against 1.6` là
+trận tốt cho tiền đạo và trận tệ cho hậu vệ. Xếp một hạng duy nhất cho cả bốn vị
+trí — thứ FDR chính thức của FPL làm — là trộn hai câu hỏi khác nhau vào một câu
+trả lời. Đo được trên dữ liệu hiện tại: Leeds là **FDR 2 cho tiền vệ nhưng FDR 4
+cho hậu vệ**, Bournemouth là 4 cho tiền vệ và 5 cho hậu vệ.
+
+### BƯỚC 5 — Schedule Ease
+
+```
+Schedule Ease = Σ w_k · RoleEase(vòng k) / Σ w_k  −  phạt bất định
+w_k           = 0.5^(k / 4)        # nửa chu kỳ 4 vòng
+```
+
+**Gộp ở cấp vòng đấu, không phải cấp trận.** Đó là chỗ duy nhất xử lý đúng được
+vòng trắng và vòng đôi: vòng trắng là **0 điểm** (không đá thì không có điểm — một
+sự thật, không phải dữ liệu thiếu), vòng đôi là tổng của hai trận. Trung bình theo
+*trận* làm vòng trắng biến mất khỏi phép tính và làm vòng đôi trông y hệt vòng đơn
+— đúng hai lỗi khiến các bảng FDR thông thường vô dụng ở giai đoạn tái đấu.
+
+Phạt bất định gộp ba thứ **đã biết là chưa biết** (trần 12 điểm percentile, tức hơn
+nửa bậc FDR):
+
+| Nguồn | Tỷ trọng | Ý nghĩa |
+|-------|----------|---------|
+| `share_no_market` | 50% | phần lịch chưa nhà cái nào ra giá |
+| `1 − evidence_weight` | 35% | BƯỚC 1 gộp được mấy trong 5 nguồn cho đội này |
+| `share_no_kickoff` | 15% | trận chưa có giờ chính thức, còn có thể bị dời |
+
+Trước vòng 1 khoản phạt gần như đồng đều (đo được: 6.3–6.5 cho cả 20 đội) nên nó
+**không** đảo thứ tự — và đó là hành vi đúng: bất định nên hạ mức tin cậy của cả
+bảng, không nên xáo lại bảng. Nó chỉ cắn thật khi hai đội chênh nhau về lượng bằng
+chứng, ví dụ một đội có kèo cho 6/8 vòng còn đội kia chỉ có 1/8.
+
+### BƯỚC 6 — FDR theo ngũ phân vị
+
+Xếp hạng theo Schedule Ease rồi chia đúng năm nhóm bằng nhau: 20 đội → **đúng 4 đội
+mỗi bậc**. Chia theo *thứ hạng* chứ không theo ngưỡng giá trị, vì trước vòng 1 cả
+giải chụm lại quanh nhau và một ngưỡng cố định sẽ dồn hết vào FDR 3. Từng ô lịch
+cũng có FDR riêng, lấy từ percentile của ô (số ô mỗi vòng không chia hết cho 5 nên
+ở cấp ô dùng percentile hợp hơn thứ hạng).
+
+### Độ khó lịch KHÔNG phải đầu vào cuối cùng để chọn cầu thủ
+
+Nó là **một thừa số** trong dự báo cầu thủ, và `expected_points()` ghép đúng như vậy:
+
+```
+xP = FixtureOpportunity × ExpectedMinutes × PlayerRole × PlayerShare
+     + Bonus + DefensiveContribution − (thẻ + bàn thua)
+```
+
+| Thừa số | Nằm ở đâu trong code |
+|---------|----------------------|
+| FixtureOpportunity | `fixture_adj = λ_for(trận) / nền_giải`, và `λ_conceded` cho sạch lưới |
+| ExpectedMinutes | `minutes_frac = xMins/90`, `p_60_plus` cho điểm ra sân & sạch lưới |
+| PlayerRole | per-90 đã co giãn (`xg90`, `xa90`, `dc90`, `bps90`) + `pen_bump` cho người đá phạt đền |
+| PlayerShare | `team_goal_scale` — chuẩn hoá để tổng bàn kỳ vọng của cả đội bằng đúng λ |
+| Bonus | chia quỹ 6 điểm trong nội bộ trận, cần cả 22 người |
+| DefensiveContribution | `2 · P(số hành động ≥ ngưỡng)` |
+
+**Đo được lịch nặng bao nhiêu.** Tính xP 8 vòng của 496 cầu thủ hai lần — một lần
+với lịch thật, một lần với lịch trung tính (λ hai chiều = nền giải):
+
+| Đại lượng | p10 | trung vị | p90 | biên độ |
+|-----------|-----|----------|-----|---------|
+| đòn bẩy của **lịch** (xP thật / xP trung tính) | 0.92 | 0.99 | 1.14 | **1.24×** |
+| chất lượng **cầu thủ** (xP 8 vòng ở lịch trung tính) | 4.12 | 10.99 | 22.60 | **5.49×** |
+
+Lịch quyết định **ít hơn khoảng bốn lần** so với chính cầu thủ. Hệ quả cụ thể trên
+dữ liệu hiện tại: trong **top 40 xP** chỉ có 16 người thuộc nhóm lịch FDR 1, còn 13
+người thuộc FDR 3–4. **Watkins** (Aston Villa, lịch FDR 4) đứng **thứ 5 toàn giải**
+và hơn **118/122** cầu thủ có lịch FDR 1, vì 74 xMins và đá phạt đền. Ngược lại
+Saka (FDR 1) chỉ 57 xMins nên vẫn bị hai cầu thủ lịch FDR 3–5 vượt qua.
+
+**Một chỗ lệch có chủ ý so với công thức trên: `− Risk` không nằm trong xP.** Rủi ro
+là một trục riêng (`engine/risk.py` → `minutes_risk` / `performance_risk`), vào bài
+toán tối ưu dưới dạng **hệ số phạt khi chọn** (`risk_weight` trong
+`optimizer/transfer.py`) chứ không trừ vào xP. Lý do: xP phải giữ được nghĩa "kỳ
+vọng không thiên lệch". Trừ rủi ro vào đó là trộn kỳ vọng với khẩu vị rủi ro, và
+sau đó không còn tách lại được — cùng một con số vừa dùng để dự báo vừa dùng để
+xếp hạng an toàn thì hỏng cả hai việc.
 
 ## 3. Monte Carlo — phân bổ bàn thắng cho cầu thủ
 

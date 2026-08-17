@@ -23,6 +23,7 @@ from app.services.common import (
     planning_start_gw,
     projections_for_gw,
     team_lookup,
+    iso_utc,
 )
 from app.services.fixtures import fixture_ticker
 from app.services.news import news_feed
@@ -357,7 +358,7 @@ def _answer_gameweek(db: Session) -> dict:
     gw = next_gameweek(db)
     if not gw:
         return _no_data("chưa xác định được vòng đấu")
-    dl = gw.deadline_time.isoformat() if gw.deadline_time else None
+    dl = iso_utc(gw.deadline_time) if gw.deadline_time else None
     txt = f"**Vòng đấu tiếp theo: {gw.name}**"
     if dl:
         txt += f"\n\n- Hạn chót: `{dl}` (hiển thị giờ Việt Nam trên trang chủ)"

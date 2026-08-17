@@ -18,6 +18,29 @@ from app.models import (
 from app.scoring import position_name
 
 
+def iso_utc(dt) -> str | None:
+    """ISO-8601 kèm múi giờ rõ ràng. `None` vào thì `None` ra.
+
+    SQLite không lưu `tzinfo`, nên mọi `DateTime` đọc ra khỏi DB đều **naive** và
+    `.isoformat()` phát ra `"2026-08-21T17:30:00"` — không `Z`, không offset. Theo
+    chuẩn ECMAScript, `new Date()` với chuỗi date-time không có offset phải hiểu là
+    GIỜ ĐỊA PHƯƠNG, nên ở +07 mọi mốc thời gian trên web lệch đúng 7 tiếng: đo được
+    "9 giờ trước" cho một lần chạy mô hình mới 1.7 giờ, và **đồng hồ đếm ngược hạn
+    chót thiếu 7 tiếng** — mốc nguy hiểm nhất trong cả sản phẩm.
+
+    Mọi thứ ghi vào các cột này đều là UTC (`datetime.now(timezone.utc)` ở phía ta,
+    và FPL API cũng phát UTC), nên gắn UTC vào lúc đọc là khôi phục thông tin đã
+    biết chứ không phải suy đoán. Giá trị đã có `tzinfo` thì giữ nguyên.
+    """
+    if dt is None:
+        return None
+    if getattr(dt, "tzinfo", None) is None:
+        from datetime import timezone
+
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.isoformat()
+
+
 def team_lookup(db: Session) -> dict[int, Team]:
     return {t.id: t for t in db.scalars(select(Team)).all()}
 

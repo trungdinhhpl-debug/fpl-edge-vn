@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import InjuryReport, Player
-from app.services.common import player_public, team_lookup
+from app.services.common import player_public, team_lookup, iso_utc
 from app.services.news_tiers import (
     BY_KEY, TIERS, classify_origin, recommend, xmins_before_after,
 )
@@ -71,8 +71,8 @@ def news_feed(db: Session, impact: str | None = None, tier: str | None = None,
             "status": r.status,
             "chance_of_playing": r.chance_of_playing,
             "news": r.news,
-            "published_at": r.published_at.isoformat() if r.published_at else None,
-            "fetched_at": r.fetched_at.isoformat() if r.fetched_at else None,
+            "published_at": iso_utc(r.published_at) if r.published_at else None,
+            "fetched_at": iso_utc(r.fetched_at) if r.fetched_at else None,
         })
     reports = list(current.values())
     ctx = _news_context(db)
@@ -125,8 +125,8 @@ def news_feed(db: Session, impact: str | None = None, tier: str | None = None,
             "tier_reliability": t.reliability,
             "source_name": r.source_name,
             "source_url": r.source_url,
-            "published_at": r.published_at.isoformat() if r.published_at else None,
-            "fetched_at": r.fetched_at.isoformat() if r.fetched_at else None,
+            "published_at": iso_utc(r.published_at) if r.published_at else None,
+            "fetched_at": iso_utc(r.fetched_at) if r.fetched_at else None,
             "independent_sources": len(names),
             "independent_source_names": names,
             "history": history.get(r.player_id, []),
@@ -189,7 +189,7 @@ def model_inferred(db: Session, ctx: dict, reported: set[int]) -> list[dict]:
             "tier_reliability": t.reliability,
             "source_name": "FPL Edge model", "source_url": None,
             "published_at": None,
-            "fetched_at": e.data_cutoff.isoformat() if e.data_cutoff else None,
+            "fetched_at": iso_utc(e.data_cutoff) if e.data_cutoff else None,
             "independent_sources": 0,
             "independent_source_names": [],
             "affected_gameweek": ctx["gw"],

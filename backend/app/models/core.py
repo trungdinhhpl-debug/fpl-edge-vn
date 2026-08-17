@@ -151,6 +151,13 @@ class Player(Base):
     bonus: Mapped[int] = mapped_column(Integer, default=0)
     bps: Mapped[int] = mapped_column(Integer, default=0)
     penalties_order: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Số quả 11m ĐÁ HỎNG. FPL không công bố `penalties_scored` cũng không công bố
+    # npxG, nên đây là dấu vết duy nhất của chấm 11m trong dữ liệu. Ở cấp CẦU THỦ
+    # nó quá thưa để dùng (15/20 người đá 11m hỏng đúng 0 quả), nhưng cộng lại
+    # TOÀN GIẢI thì đủ mẫu để suy ra tỷ lệ penalty của giải — xem
+    # `app/engine/penalties.py`. Nullable để `db.ensure_columns()` thêm được vào
+    # bảng đang chạy.
+    penalties_missed: Mapped[int | None] = mapped_column(Integer, nullable=True)
     corners_and_indirect_freekicks_order: Mapped[int | None] = mapped_column(Integer, nullable=True)
     direct_freekicks_order: Mapped[int | None] = mapped_column(Integer, nullable=True)
 

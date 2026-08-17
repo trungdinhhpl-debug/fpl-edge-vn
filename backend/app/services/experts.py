@@ -89,10 +89,26 @@ def track_records(db: Session) -> dict[int, dict]:
 
 
 def demo_source_names() -> set[str]:
-    """Names of the synthetic sources demo signals are allowed to speak for."""
+    """Tên các nguồn tổng hợp — giờ luôn rỗng, giữ lại để đường đọc còn tự vệ."""
     from app.providers.expert_provider import DEFAULT_SOURCES
 
     return {s.name for s in DEFAULT_SOURCES if s.url is None}
+
+
+def is_fabricated(source: ExpertSource) -> bool:
+    """Nguồn này có phải hàng bịa còn sót trong một CSDL đang chạy không.
+
+    **Dữ liệu cũ sống lâu hơn code.** Đo trên production ngày kiểm tra: backend
+    đang chạy `xp-0.4.0` và CSDL Neon vẫn còn nguyên 5 hàng "Nguồn demo A–E" cùng
+    7 tín hiệu `[DEMO]`. Sửa `DEFAULT_SOURCES` chỉ dọn được đường GHI; những hàng
+    đã nằm sẵn trong bảng thì chỉ biến mất sau một lần đồng bộ — mà giữa lúc deploy
+    và lúc đồng bộ chạy, trang Chuyên gia vẫn sẽ hiển thị chúng.
+
+    Nên đường ĐỌC phải tự nhận ra chúng. Dấu hiệu là `url` rỗng: mọi nguồn thật đều
+    có địa chỉ kiểm chứng được, còn một cái tên không có địa chỉ thì không ai tra
+    lại được — đó đúng là định nghĩa của một nguồn bịa.
+    """
+    return not (source.url or "").strip()
 
 
 def _domains(source: ExpertSource) -> list[str]:
@@ -176,7 +192,14 @@ def analyse_player(signals: list[dict]) -> dict:
 def expert_consensus(db: Session, limit: int = 50) -> dict:
     teams = team_lookup(db)
     players = {p.id: p for p in db.scalars(select(Player)).all()}
-    sources = {s.id: s for s in db.scalars(select(ExpertSource)).all()}
+    # Lọc nguồn bịa ngay ở đường ĐỌC. Một CSDL đang chạy còn nguyên các hàng
+    # "Nguồn demo" cho tới lần đồng bộ kế tiếp, và giữa lúc deploy với lúc đồng bộ
+    # chạy thì trang này vẫn sẽ hiển thị chúng — xem `is_fabricated`.
+    sources = {
+        s.id: s
+        for s in db.scalars(select(ExpertSource)).all()
+        if not is_fabricated(s)
+    }
     records = track_records(db)
     signals = db.scalars(select(ExpertSignal)).all()
 
@@ -224,18 +247,62 @@ def expert_consensus(db: Session, limit: int = 50) -> dict:
     # three separate sources outranks one shouted by eight accounts.
     rows.sort(key=lambda r: (r["independent_sources"], r["posts"]), reverse=True)
 
+    live_counts: dict[int, int] = defaultdict(int)
+    for s in signals:
+        if not s.is_mock:
+            live_counts[s.source_id] += 1
+
     return {
         "players": rows[:limit],
         "sources": [_source_payload(s, records.get(s.id)) for s in sources.values()],
+        "source_status": _source_status(db, sources.values(), live_counts),
         "domains": [{"key": k, "label": v} for k, v in EXPERTISE_DOMAINS.items()],
         "min_scored_sample": MIN_SCORED_SAMPLE,
         "disclaimer": (
-            "Đồng thuận được tính SAU khi gộp các tài khoản dẫn lại cùng một nguồn "
-            "gốc — nhiều bài đăng về một phát biểu là MỘT bằng chứng, không phải "
-            "nhiều. Độ chính xác chỉ hiện khi đã có đủ dự đoán được chấm điểm; "
-            "không gán sẵn con số cho người thật."
+            "Mọi tín hiệu ở đây đến từ API công khai của FPL — không cào nội dung "
+            "trả phí, và không gắn phát biểu cho người thật. Đồng thuận được tính "
+            "SAU khi gộp các tài khoản dẫn lại cùng một nguồn gốc. Độ chính xác chỉ "
+            "hiện khi đã có đủ dự đoán ĐÃ ĐƯỢC CHẤM bằng kết quả thật."
         ),
     }
+
+
+def _source_status(db: Session, sources, live_counts: dict[int, int]) -> list[dict]:
+    """Nguồn nào đang thật sự phát tín hiệu, nguồn nào chưa — và vì sao chưa.
+
+    Một trang tên là "Chuyên gia" mà im lặng khi không có dữ liệu sẽ bị đọc thành
+    "không ai có ý kiến gì". Danh sách này nói thẳng trạng thái của từng nguồn, nên
+    ô trống là một câu trả lời chứ không phải một khoảng lặng.
+    """
+    from app.models import SourceFetchLog
+
+    log = db.scalars(
+        select(SourceFetchLog)
+        .where(SourceFetchLog.source_name == "Expert signals (FPL API)")
+        .order_by(SourceFetchLog.id.desc())
+    ).first()
+    note = (log.detail or "") if log is not None else ""
+
+    out = []
+    for s in sources:
+        n = live_counts.get(s.id, 0)
+        if n:
+            state, why = "đang chạy", f"{n} tín hiệu ở lần đồng bộ gần nhất."
+        elif s.source_type == "community" and s.name.startswith("Top "):
+            state, why = "chưa có dữ liệu", (
+                next((p.strip() for p in note.split("·") if "nhóm dẫn đầu" in p),
+                     "Đội hình chỉ công khai sau hạn chót chuyển nhượng.")
+            )
+        else:
+            state, why = "chưa kết nối", (
+                "Đăng bạ nguồn có thật — đây là chỗ cắm một nguồn RSS/API có bản "
+                "quyền. Chưa nối thì không phát tín hiệu nào, và không bịa thay."
+            )
+        out.append({"id": s.id, "name": s.name, "type": s.source_type,
+                    "state": state, "why": why, "signals": n})
+    order = {"đang chạy": 0, "chưa có dữ liệu": 1, "chưa kết nối": 2}
+    out.sort(key=lambda r: (order[r["state"]], r["name"]))
+    return out
 
 
 def _source_payload(s: ExpertSource, record: dict | None) -> dict:

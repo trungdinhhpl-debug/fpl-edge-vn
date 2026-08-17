@@ -9,7 +9,7 @@ from collections import defaultdict
 from datetime import datetime, timezone
 
 import numpy as np
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from app.config import settings
@@ -23,6 +23,7 @@ from app.engine.team_strength import (
     load_promoted_map,
 )
 from app.engine import bonus as bonus_mod
+from app.engine import penalties as pen_mod
 from app.engine.xmins import estimate_minutes
 from app.engine.xpoints import _poisson_ge_k, expected_points
 from app.models import (
@@ -51,14 +52,85 @@ def get_planning_start_gw(db: Session) -> int:
 
 
 def _fixtures_by_gw(fixtures: list[Fixture]) -> dict[int, dict[int, list[tuple]]]:
-    """gw -> team_id -> [(opp_id, is_home, fixture_id), ...]"""
+    """gw -> team_id -> [(opp_id, is_home, fixture_id), ...], **theo thứ tự đá**.
+
+    Thứ tự quan trọng với vòng đôi: "trận thứ hai" chỉ có nghĩa khi biết trận nào
+    đá trước. Trận chưa có giờ chính thức xếp cuối, và khi đó hai hiệu ứng của vòng
+    đôi (mệt mỏi, xoay tua) tự tắt vì không tính được khoảng cách.
+    """
     out: dict[int, dict[int, list[tuple]]] = defaultdict(lambda: defaultdict(list))
-    for f in fixtures:
-        if f.event is None:
-            continue
+    ordered = sorted(
+        (f for f in fixtures if f.event is not None),
+        key=lambda f: (f.kickoff_time is None, f.kickoff_time or 0, f.id),
+    )
+    for f in ordered:
         out[f.event][f.team_h].append((f.team_a, True, f.id))
         out[f.event][f.team_a].append((f.team_h, False, f.id))
     return out
+
+
+# --------------------------------------------------- mệt mỏi ở vòng đôi ------
+# Số ngày nghỉ được coi là bình thường; ít hơn thì bắt đầu trừ.
+FATIGUE_FULL_REST_DAYS = 4.0
+# Mất bao nhiêu phút kỳ vọng cho mỗi ngày nghỉ thiếu.
+FATIGUE_PER_MISSING_DAY = 0.035
+FATIGUE_FLOOR = 0.85
+
+
+def _days_rest(
+    team_fx: list[tuple], index: int, kickoff_of: dict[int, object]
+) -> float | None:
+    """Số ngày giữa trận thứ `index` và trận liền trước của cùng đội, cùng vòng."""
+    if index <= 0:
+        return None
+    now = kickoff_of.get(team_fx[index][2])
+    prev = kickoff_of.get(team_fx[index - 1][2])
+    if now is None or prev is None:
+        return None
+    return max(0.0, (now - prev).total_seconds() / 86400.0)
+
+
+def apply_fatigue(est, factor: float):
+    """Bản sao của ước lượng phút đã hạ theo mệt mỏi, giữ nguyên các trường khác.
+
+    Áp cho CẢ đường giải tích lẫn Monte Carlo — cùng một `est` chảy vào cả hai —
+    nên hai đường không thể nói khác nhau về trận thứ hai của vòng đôi.
+    """
+    from dataclasses import replace
+
+    if factor >= 1.0:
+        return est
+    p_start = est.p_start * factor
+    # Phút mất đi từ suất đá chính không biến mất khỏi đội hình: một phần chuyển
+    # thành suất vào sân từ ghế. Người bị xoay ra hiếm khi vắng mặt hẳn.
+    p_sub = min(1.0 - p_start, est.p_sub + (est.p_start - p_start) * 0.5)
+    return replace(
+        est,
+        xmins=est.xmins * factor,
+        p_start=p_start,
+        p_sub=p_sub,
+        p_60_plus=est.p_60_plus * factor,
+        p_no_play=max(0.0, 1.0 - p_start - p_sub),
+        reason=f"{est.reason} · trận 2 vòng đôi, hệ số mệt mỏi {factor:.2f}",
+    )
+
+
+def fatigue_factor(days_rest: float | None) -> float:
+    """Hệ số phút kỳ vọng cho trận thứ hai của một vòng đôi.
+
+    Đây là hiệu ứng **kỳ vọng**: đá lại sau 2–3 ngày thì trung bình được ít phút
+    hơn — bị rút ra sớm hơn, hoặc vào sân từ ghế. Nó tách bạch với xoay tua ở
+    `montecarlo.rotation_start_prob`, vốn giữ nguyên kỳ vọng và chỉ đổi **phụ
+    thuộc** giữa hai trận. Hai kênh khác nhau nên cộng vào không phải là đếm hai
+    lần: một cái dịch trung bình, một cái dịch phương sai.
+
+    Hệ số chưa khớp được từ dữ liệu (DB chưa có vòng đôi nào đã đá), nên nó cố ý
+    nhỏ và có sàn. Không biết giờ đá thì trả 1.0 — không phạt vì thiếu thông tin.
+    """
+    if days_rest is None:
+        return 1.0
+    missing = max(0.0, FATIGUE_FULL_REST_DAYS - days_rest)
+    return max(FATIGUE_FLOOR, 1.0 - FATIGUE_PER_MISSING_DAY * missing)
 
 
 def build_projections(
@@ -145,6 +217,7 @@ def build_projections(
     stats_from_season = _stats_season(db)
 
     fx_by_gw = _fixtures_by_gw(fixtures)
+    kickoff_of = {f.id: f.kickoff_time for f in fixtures}
     start_gw = get_planning_start_gw(db)
     gws = [gw for gw in range(start_gw, start_gw + horizon) if gw <= 38]
 
@@ -200,6 +273,29 @@ def build_projections(
             prior_reliability=prior_rel.get(p.id, 1.0),
         )
 
+    # ---- chấm 11m: tỷ lệ đo ở cấp GIẢI, người đá đọc từ `penalties_order` ------
+    # Cấp cầu thủ không đủ mẫu — 15/20 người đá 11m số 1 hỏng đúng 0 quả, nên
+    # `penalties_missed / (1 − tỷ lệ vào)` ước ra 0 cho họ và 9.5 quả cho người hỏng
+    # 2 quả. Tỷ lệ vì thế được suy từ tổng số quả hỏng của CẢ GIẢI, còn việc ai đá
+    # thì đọc từ `penalties_order`. Xem app/engine/penalties.py.
+    _team_matches = sum(matches_played.values())
+    if _team_matches == 0:
+        # Tiền mùa: `penalties_missed` FPL đang phát là tổng của MÙA TRƯỚC, nên mẫu
+        # số phải là số trận-đội của mùa trước chứ không phải 0 của mùa này. Ghép
+        # tử số một mùa với mẫu số mùa khác là cách chắc chắn ra sai tỷ lệ.
+        _n_gw = db.scalar(select(func.count()).select_from(Gameweek)) or 38
+        _team_matches = _n_gw * len(teams)
+    pen_rate = pen_mod.league_penalty_rate(players, team_matches=_team_matches)
+    # Xác suất người đá 11m SỐ 1 của mỗi đội có mặt trên sân — người số 2 chỉ đá khi
+    # người số 1 vắng, nên phần của anh ta suy từ mô hình phút chứ không từ một tỷ
+    # lệ chia ghi cứng.
+    lead_taker_on_pitch: dict[int, float] = {}
+    for _tid, _squad in players_by_team.items():
+        _lead = next((x for x in _squad if x.penalties_order == 1), None)
+        if _lead is not None:
+            _e = _minutes_estimate(_lead, _tid)
+            lead_taker_on_pitch[_tid] = min(1.0, _e.p_start + _e.p_sub)
+
     def _xp(p, est, lam_for: float, lam_against: float, team_id: int,
             bonus_override: float | None, team_goal_scale: float = 1.0):
         return expected_points(
@@ -217,6 +313,8 @@ def build_projections(
             bonus_override=bonus_override,
             team_goal_scale=team_goal_scale,
             penalties_order=p.penalties_order,
+            penalty_rate=pen_rate.goals_per_team_match,
+            lead_taker_on_pitch=lead_taker_on_pitch.get(team_id),
             xmins=est.xmins,
             p_start=est.p_start,
             p_appear=est.p_start + est.p_sub,
@@ -328,7 +426,16 @@ def build_projections(
             # collect MC arrays per player across their fixture(s)
             mc_accum: dict[int, np.ndarray] = {}
 
-            for (opp_id, is_home, fixture_id) in team_fx:
+            # Vòng đôi: mặt nạ "đã đá chính trận trước" được chuyền sang trận sau để
+            # Monte Carlo dựng được xoay tua. Trận đơn thì hai biến này rỗng và mọi
+            # thứ chạy y như cũ.
+            prior_started: dict[int, np.ndarray] = {}
+            prior_p_start: dict[int, float] = {}
+
+            for fx_index, (opp_id, is_home, fixture_id) in enumerate(team_fx):
+                fatigue = 1.0
+                if fx_index > 0:
+                    fatigue = fatigue_factor(_days_rest(team_fx, fx_index, kickoff_of))
                 lam_for, lam_against = ts.expected_goals(team.id, opp_id, is_home)
                 mc_players: list[MCPlayer] = []
                 # tổng xG của riêng nhóm được mô phỏng (xem chú thích ở pre-pass);
@@ -338,7 +445,7 @@ def build_projections(
                 ) or team_xg_total[team.id]
 
                 for p in squad:
-                    est = _minutes_estimate(p, team.id)
+                    est = apply_fatigue(_minutes_estimate(p, team.id), fatigue)
                     bd = _xp(
                         p, est, lam_for, lam_against, team.id,
                         bonus_by_player_fixture.get((p.id, fixture_id)),
@@ -389,9 +496,15 @@ def build_projections(
                     # bản dựng lại bằng tay sẽ có xMins khác (matches_played,
                     # role_rank, no_pl_history) và hai bên hết so được với nhau.
                     col: dict | None = {} if collect_components is not None else None
+                    now_started: dict[int, np.ndarray] = {}
                     sims = simulate_fixture(
-                        mc_players, lam_for, lam_against, iters, rng, collect=col
+                        mc_players, lam_for, lam_against, iters, rng, collect=col,
+                        prior_started=prior_started or None,
+                        prior_p_start=prior_p_start or None,
+                        out_started=now_started,
                     )
+                    prior_started = now_started
+                    prior_p_start = {m.player_id: m.p_start for m in mc_players}
                     if col is not None and collect_components is not None:
                         for pid, c in col.items():
                             slot = collect_components.setdefault((pid, gw), {})
@@ -431,7 +544,10 @@ def build_projections(
                     variance=mc["variance"],
                 )
                 overall = risk_mod.combine(mr, pr)
-                conf = risk_mod.confidence_from(est.confidence, p.minutes, bool(recent_minutes.get(p.id)))
+                conf = risk_mod.confidence_from(
+                    est.confidence, p.minutes, bool(recent_minutes.get(p.id)),
+                    team_matches_played=matches_played.get(team.id, 0),
+                )
 
                 db.add(ExpectedMinutes(
                     player_id=p.id, gameweek=gw, xmins=round(acc.xmins, 1),

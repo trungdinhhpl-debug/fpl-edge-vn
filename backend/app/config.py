@@ -110,6 +110,16 @@ class Settings(BaseSettings):
     prior_weight_new_manager: float = 0.6
     prior_weight_new_signing: float = 0.4
 
+    # ---- Nguồn "chuyên gia" (app/providers/fpl_experts.py) ----
+    # Bao nhiêu người dẫn đầu bảng xếp hạng tổng được lấy đội hình để tính đồng
+    # thuận. Mỗi người tốn MỘT lệnh gọi API, nên con số này là đánh đổi trực tiếp
+    # giữa độ mịn của đồng thuận và thời gian đồng bộ (100 người ≈ 12 giây ở mức
+    # `fpl_request_delay_ms` mặc định).
+    expert_top_manager_count: int = 100
+    # Lấy đồng thuận nhóm dẫn đầu khi đồng bộ. Tắt thì trang Chuyên gia chỉ còn
+    # nguồn mô hình của FPL, và nói rõ là đã bị tắt.
+    expert_fetch_top_managers: bool = True
+
     # Understat (optional, Phase 2). Empty => rely on FPL's own xG/xA.
     understat_enabled: bool = False
 
@@ -138,7 +148,19 @@ class Settings(BaseSettings):
     #   của đội theo λ; khớp Monte Carlo với giải tích ở 5 chỗ (điểm ra sân đủ 60
     #   phút, sạch lưới, bàn thua, tần suất bonus, mẫu số share); đồng thuận nhà cái
     #   chuyển sang trung vị + hạ trọng số khi thị trường mỏng.
-    model_version: str = "xp-0.4.0"
+    # 0.5.0 (2026-08-07): viết lại toàn bộ phần lịch thi đấu theo 6 bước. Prior đội
+    #   bóng thành phép gộp 5 nguồn có trọng số (45/25/15/10/5) với chuẩn hoá lại
+    #   khi thiếu nguồn; hiệu chỉnh theo đối thủ bằng IPF khi có xG theo trận; λ
+    #   chuyển sang dạng log cộng 10 số hạng (thêm đội hình, ngày nghỉ, mật độ) và
+    #   λ_against dùng chung một công thức với λ_for; blend kèo chuyển từ trung bình
+    #   CỘNG sang trung bình HÌNH HỌC, kèm hệ số hiệu chuẩn toàn cục lan sang các
+    #   trận chưa có giá. λ của MỌI trận đổi -> xP đổi theo.
+    # 0.6.0 (2026-08-11): tách chấm 11m khỏi bóng sống — tỷ lệ đo ở cấp GIẢI (cấp
+    #   cầu thủ không đủ mẫu), người đá đọc từ `penalties_order`, phần 11m co giãn
+    #   theo độ khó trận yếu hơn bóng sống, và bỏ `pen_bump` vốn đếm hai lần. Vòng
+    #   đôi: thêm xoay tua (tương quan âm giữa hai lần đá chính, giữ nguyên biên
+    #   duyên nên xP không đổi — chỉ phương sai đổi) và mệt mỏi ở trận thứ hai.
+    model_version: str = "xp-0.6.0"
 
     @property
     def cors_list(self) -> list[str]:

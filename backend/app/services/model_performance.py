@@ -28,6 +28,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.config import settings
+from app.services.common import iso_utc
 from app.models import (
     Gameweek,
     Player,
@@ -292,7 +293,7 @@ def capture_snapshots(db: Session, gameweek: int | None = None) -> dict:
         "written": written,
         "locked": locked,
         "skipped_already_locked": skipped,
-        "deadline": deadline.isoformat() if deadline else None,
+        "deadline": iso_utc(deadline) if deadline else None,
         "past_deadline": past_deadline,
     }
 

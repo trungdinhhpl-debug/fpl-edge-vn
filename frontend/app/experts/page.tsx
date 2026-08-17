@@ -11,20 +11,38 @@ function ConsensusBar({ p }: { p: any }) {
   const real = p.consensus_pct;
   const naive = p.naive_consensus_pct;
   const inflated = real != null && naive != null && naive > real + 5;
+  // Một nguồn duy nhất thì KHÔNG có đồng thuận nào để đo. "100% đồng thuận" khi chỉ
+  // có một tiếng nói là đúng về số học nhưng đọc thành "ai cũng đồng ý" — sai hẳn ý
+  // nghĩa. Đây chính là lỗi mà cả trang này được viết ra để chống, nên nó không được
+  // phép tồn tại ở chính đây.
+  const single = (p.independent_sources ?? 0) <= 1;
   return (
     <div className="space-y-1">
       <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1 text-sm">
-        <b className="text-lg tabular-nums">{real == null ? "–" : `${real}%`}</b>
-        <span className="text-muted-foreground">đồng thuận thực</span>
-        {naive != null && (
+        {single ? (
+          <>
+            <b className="text-lg">1 nguồn</b>
+            <span className="text-muted-foreground">
+              — chưa đủ để nói về đồng thuận
+            </span>
+          </>
+        ) : (
+          <>
+            <b className="text-lg tabular-nums">{real == null ? "–" : `${real}%`}</b>
+            <span className="text-muted-foreground">đồng thuận thực</span>
+          </>
+        )}
+        {!single && naive != null && (
           <span className={`text-xs ${inflated ? "text-caution" : "text-muted-foreground"}`}>
             (đếm thô: {naive}%)
           </span>
         )}
       </div>
-      <div className="h-2 overflow-hidden rounded-full bg-muted">
-        <div className="h-full rounded-full bg-primary" style={{ width: `${real ?? 0}%` }} />
-      </div>
+      {!single && (
+        <div className="h-2 overflow-hidden rounded-full bg-muted">
+          <div className="h-full rounded-full bg-primary" style={{ width: `${real ?? 0}%` }} />
+        </div>
+      )}
       <div className="flex flex-wrap gap-x-3 text-xs text-muted-foreground">
         <span>{p.posts} bài đăng</span>
         <span className="font-medium text-foreground">
@@ -131,6 +149,44 @@ export default function ExpertsPage() {
           </Card>
         )) : <p className="text-sm text-muted-foreground">{t("noData")}</p>}
       </div>
+
+      {/* --------------------------- trạng thái từng nguồn ------------------ */}
+      {data.source_status && (
+        <Card>
+          <CardHeader><CardTitle>Nguồn nào đang chạy</CardTitle></CardHeader>
+          <CardContent className="space-y-2 text-sm">
+            <p className="text-muted-foreground">
+              Mọi tín hiệu ở trang này đến từ <b>API công khai của FPL</b> — không cào
+              nội dung trả phí, và không gắn phát biểu cho người thật. Nguồn chưa có dữ
+              liệu thì nói rõ vì sao, thay vì để trống cho người đọc tự suy.
+            </p>
+            <ul className="space-y-1.5">
+              {data.source_status.map((s: any) => (
+                <li key={s.id} className="flex flex-wrap items-baseline gap-x-2">
+                  <Badge
+                    className={
+                      s.state === "đang chạy"
+                        ? "bg-positive/15 text-positive"
+                        : s.state === "chưa có dữ liệu"
+                          ? "bg-caution/15 text-caution"
+                          : "bg-muted text-muted-foreground"
+                    }
+                  >
+                    {s.state}
+                  </Badge>
+                  <b>{s.name}</b>
+                  {s.signals > 0 && (
+                    <span className="tabular-nums text-muted-foreground">
+                      · {s.signals} tín hiệu
+                    </span>
+                  )}
+                  <span className="w-full text-xs text-muted-foreground">{s.why}</span>
+                </li>
+              ))}
+            </ul>
+          </CardContent>
+        </Card>
+      )}
 
       {/* ------------------------------- source registry -------------------- */}
       <Card>

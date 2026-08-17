@@ -5,7 +5,7 @@ import { postJSON } from "@/lib/api";
 import { useT } from "@/lib/i18n";
 import { Card, CardContent, CardHeader, CardTitle, Button, Input, Select, Spinner, ErrorBox, Badge } from "@/components/ui";
 import { DecisionTree } from "@/components/decision-tree";
-import { fmt } from "@/lib/format";
+import { fmt, parseApiDate } from "@/lib/format";
 
 const PROFILES = [
   { key: "safe", label: "An toàn", color: "bg-positive/15 text-positive" },
@@ -35,7 +35,7 @@ export default function PlannerPage() {
       if (squad_ids.length !== 15) {
         const st = imp.squad_status;
         const when = st?.available_after
-          ? ` Đội hình sẽ hiện sau ${new Date(st.available_after).toLocaleString("vi-VN", {
+          ? ` Đội hình sẽ hiện sau ${parseApiDate(st.available_after).toLocaleString("vi-VN", {
               timeZone: "Asia/Ho_Chi_Minh",
               dateStyle: "short",
               timeStyle: "short",

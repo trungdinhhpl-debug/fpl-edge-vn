@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.services.common import iso_utc
 from app.models import UserProfile
 from app.providers.fpl_client import FPLClient, FPLNotFound
 
@@ -135,7 +136,7 @@ def _squad_status(db: Session, gw: int | None, picks: list, error: str | None) -
     if gw:
         row = db.get(Gameweek, gw)
         if row and row.deadline_time:
-            deadline = row.deadline_time.isoformat()
+            deadline = iso_utc(row.deadline_time)
         last_kick = db.scalar(
             select(func.max(Fixture.kickoff_time)).where(Fixture.event == gw)
         )

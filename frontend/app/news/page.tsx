@@ -5,7 +5,7 @@ import { useApi } from "@/lib/api";
 import { useT } from "@/lib/i18n";
 import { Card, CardContent, Spinner, ErrorBox, Badge, Button } from "@/components/ui";
 import { riskBg } from "@/lib/utils";
-import { timeAgo, fmt } from "@/lib/format";
+import { timeAgo, fmt, parseApiDate } from "@/lib/format";
 
 const IMPACTS = ["", "Critical", "High", "Medium", "Low"];
 
@@ -18,7 +18,7 @@ const ACTION_CLS: Record<string, string> = {
 
 function dt(iso: string | null) {
   if (!iso) return "—";
-  return new Date(iso).toLocaleString("vi-VN", {
+  return parseApiDate(iso).toLocaleString("vi-VN", {
     timeZone: "Asia/Ho_Chi_Minh", dateStyle: "short", timeStyle: "short",
   });
 }

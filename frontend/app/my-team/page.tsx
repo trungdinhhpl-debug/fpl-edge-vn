@@ -8,7 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle, Button, Input, Spinner, Error
 import { PosTag, StatusDot } from "@/components/fpl";
 import { DeadlineCountdown } from "@/components/deadline-countdown";
 import { TransferVerdict } from "@/components/transfer-verdict";
-import { fmt } from "@/lib/format";
+import { fmt, parseApiDate } from "@/lib/format";
 import { riskBg } from "@/lib/utils";
 
 export default function MyTeamPage() {
@@ -124,7 +124,7 @@ export default function MyTeamPage() {
                 <p className="flex flex-wrap items-center gap-2">
                   <span>Đội hình sẽ hiện sau:</span>
                   <b>
-                    {new Date(imported.squad_status.available_after).toLocaleString("vi-VN", {
+                    {parseApiDate(imported.squad_status.available_after).toLocaleString("vi-VN", {
                       timeZone: "Asia/Ho_Chi_Minh",
                       dateStyle: "short",
                       timeStyle: "short",

@@ -633,3 +633,94 @@ def test_new_manager_discounts_last_season_rating():
     assert _manager_factor(T("__KHONG_TON_TAI__")) == 1.0
     # hệ số phải kéo VỀ trung bình, tức nhỏ hơn 1
     assert settings.prior_weight_new_manager < 1.0
+
+
+# ------------------------------------------- tỷ lệ per-90 trên mẫu cực nhỏ ----
+def test_per90_rates_are_shrunk_so_a_one_minute_sample_cannot_explode():
+    """`tổng_mùa / (phút/90)` phải co giãn về prior, nếu không nó nổ ở mẫu bé.
+
+    Regression đo được: một cầu thủ trẻ **đá đúng 1 phút với 3 BPS** cho ra
+    `bps90 = 270` (người dẫn đầu giải thật sự chỉ 29.6). Qua số mũ 1.99 của
+    `standalone_bonus`, anh ta nhận **1.91 điểm bonus mỗi trận** trong khi một
+    trung vệ đá chính với 724 BPS cả mùa nhận 0.41 — gấp 4.6 lần.
+
+    `xg90`/`xa90`/`dc90` vốn đã được `_shrink()` bảo vệ; `bps90`, `saves90`,
+    `yc90`, `rc90` thì chưa, và đó là toàn bộ khác biệt.
+    """
+    from app.engine.xpoints import PRIOR_BPS90, expected_points
+
+    common = dict(
+        xg_season=0.0, xa_season=0.0, dc_season=0.0, red_season=0,
+        cbi_season=0.0, penalties_order=None, lam_team_goals=1.5,
+        lam_conceded=1.2, team_avg_gf=1.42,
+    )
+    # Đúng hai cầu thủ đã đo được sự đảo ngược: Byfield (TOT) và Gabriel (ARS),
+    # kèm xMins mà mô hình phút thật sự gán cho họ.
+    rookie = expected_points(
+        element_type=2, minutes_season=1, saves_season=0, yellow_season=0,
+        bps_season=3, xmins=2.5, p_start=0.022, p_appear=0.055,
+        p_60_plus=0.021, **common,
+    )
+    regular = expected_points(
+        element_type=2, minutes_season=2750, saves_season=0, yellow_season=6,
+        bps_season=724, xmins=68.5, p_start=0.772, p_appear=0.955,
+        p_60_plus=0.749, **common,
+    )
+
+    # 1 phút không được cho ra một tỷ lệ ngoài khoảng của cả giải
+    assert rookie.components["bps90"] == pytest.approx(PRIOR_BPS90[2], abs=1.0)
+    assert rookie.components["bps90"] < 30.0, "mẫu 1 phút vẫn đang nổ"
+    # Trước khi sửa: tân binh 1.907 vs trụ cột 0.412 — ĐẢO NGƯỢC gấp 4.6 lần.
+    assert regular.bonus > rookie.bonus * 10, (
+        f"tân binh {rookie.bonus:.3f} vs trụ cột {regular.bonus:.3f}"
+    )
+
+    # Hai tỷ lệ còn lại cũng vậy, và ở đây phải cho người dự bị một suất ra sân
+    # thật (xMins 45) — nếu không thì `minutes_frac` bé tự che mất chỗ nổ.
+    fringe = dict(xmins=45.0, p_start=0.3, p_appear=0.6, p_60_plus=0.3)
+
+    # 1 thẻ vàng trong 1 phút không phải "0.9 thẻ mỗi trận"
+    carded = expected_points(
+        element_type=2, minutes_season=1, saves_season=0, yellow_season=1,
+        bps_season=3, **fringe, **common,
+    )
+    assert carded.negative > -1.0, f"phạt thẻ nổ: {carded.negative}"
+
+    # thủ môn dự bị: 1 pha cứu thua trong 5 phút không phải 18 lần cứu/90
+    keeper = expected_points(
+        element_type=1, minutes_season=5, saves_season=1, yellow_season=0,
+        bps_season=3, **fringe, **common,
+    )
+    assert keeper.saves < 1.0, f"cứu thua nổ: {keeper.saves}"
+
+
+def test_preseason_confidence_cannot_be_labelled_high():
+    """Trước vòng 1, không dự báo nào được gắn nhãn "Cao".
+
+    Regression: phần thưởng "mẫu lớn" (+0.1 khi > 900 phút) đọc `minutes_season`,
+    mà trước vòng 1 đó là tổng phút của mùa TRƯỚC — tức phần thưởng được trao cho
+    một mẫu chưa hề tồn tại. Đo được: 241 cầu thủ nằm đúng ở 0.70 và giao diện gắn
+    "Tin cậy: Cao" cho toàn bộ nhóm ứng viên đội trưởng, ngay cạnh banner của
+    chính hệ thống ghi "PRE-SEASON · 100% dựa trên prior · Confidence: Low".
+    """
+    from app.engine.risk import PRESEASON_CONFIDENCE_CAP, confidence_from
+
+    # ngưỡng mà services/captains.py gọi là "Cao"
+    HIGH = 0.70
+
+    veteran_preseason = confidence_from("High", 2750, False, team_matches_played=0)
+    assert veteran_preseason < HIGH, f"vẫn ra nhãn Cao: {veteran_preseason}"
+    assert veteran_preseason <= PRESEASON_CONFIDENCE_CAP
+
+    # nhưng khi mùa giải đã chạy thì đúng là được phép Cao
+    veteran_inseason = confidence_from("High", 2750, True, team_matches_played=8)
+    assert veteran_inseason >= HIGH
+    assert veteran_inseason > veteran_preseason
+
+    # mẫu bé vẫn bị phạt trong cả hai giai đoạn — đó là hình phạt, không phải thưởng
+    assert confidence_from("Low", 100, False, team_matches_played=8) < confidence_from(
+        "Low", 2750, False, team_matches_played=8
+    )
+
+    # bỏ trống tham số = hành vi cũ, chỗ gọi lẻ không gãy
+    assert confidence_from("High", 2750, False) >= HIGH

@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_db
 from app.config import settings
 from app.db import session_scope
+from app.services.common import iso_utc
 from app.models import (
     ExpertSignal,
     Fixture,
@@ -69,7 +70,7 @@ def model_health(db: Session = Depends(get_db)) -> dict:
             # trọng số trên bị hạ theo tỷ lệ khi trận có ít nhà cái ra giá hơn mức này
             "full_support_books": settings.odds_full_support_books,
             "consensus": "median per outcome/line, de-vigged per bookmaker",
-            "last_fetched": odds_at.isoformat() if odds_at else None,
+            "last_fetched": iso_utc(odds_at) if odds_at else None,
             "inversion": {
                 "method": "joint least-squares, Dixon–Coles score matrix",
                 "markets": ["1X2", "over/under"]
@@ -90,7 +91,7 @@ def model_health(db: Session = Depends(get_db)) -> dict:
         },
         "montecarlo_iterations": settings.montecarlo_iterations,
         "projection_horizon": settings.projection_horizon,
-        "last_projection_cutoff": latest.isoformat() if latest else None,
+        "last_projection_cutoff": iso_utc(latest) if latest else None,
         "ready": n_proj > 0,
     }
 
@@ -170,7 +171,7 @@ def meta_version(db: Session = Depends(get_db)) -> dict:
         "rules_label": scoring.rules_label(revision),
         "rules_revision": revision,
         "rules_updated_at": (
-            season.rules_updated_at.isoformat()
+            iso_utc(season.rules_updated_at)
             if season and season.rules_updated_at else None
         ),
         "rules_source": scoring.RULES.source,
@@ -181,8 +182,8 @@ def meta_version(db: Session = Depends(get_db)) -> dict:
         "bps_rules_source_url": scoring.BPS_RULES.source_url,
         "bps_rules_known": scoring.BPS_RULES_KNOWN,
         "projection_version": settings.model_version,
-        "last_data_update": last_data.isoformat() if last_data else None,
-        "last_model_run": last_model.isoformat() if last_model else None,
+        "last_data_update": iso_utc(last_data) if last_data else None,
+        "last_model_run": iso_utc(last_model) if last_model else None,
         "scoring": {
             "goal_points": _by_pos_name(scoring.RULES.goal_points),
             "clean_sheet_points": _by_pos_name(scoring.RULES.clean_sheet_points),
@@ -229,7 +230,7 @@ def sources_health(db: Session = Depends(get_db)) -> dict:
             "source": r.source_name, "type": r.source_type, "status": r.status,
             "rows": r.rows, "age_minutes": age_min,
             "flag": "stale" if stale else r.status,
-            "fetched_at": r.fetched_at.isoformat() if r.fetched_at else None,
+            "fetched_at": iso_utc(r.fetched_at) if r.fetched_at else None,
         })
     return {"sources": sources, "warning": any(s["flag"] == "stale" for s in sources)}
 

@@ -14,6 +14,7 @@ from app.services.common import (
     player_public,
     projections_for_gw,
     team_lookup,
+    iso_utc,
 )
 from app.services.news import news_feed
 
@@ -24,7 +25,7 @@ def gameweek_status(db: Session) -> dict:
     return {
         "current": _gw_dict(cur),
         "next": _gw_dict(nxt),
-        "deadline": nxt.deadline_time.isoformat() if nxt and nxt.deadline_time else None,
+        "deadline": iso_utc(nxt.deadline_time) if nxt and nxt.deadline_time else None,
         "planning_start_gw": planning_start_gw(db),
     }
 
@@ -34,7 +35,7 @@ def _gw_dict(gw: Gameweek | None) -> dict | None:
         return None
     return {
         "id": gw.id, "name": gw.name,
-        "deadline": gw.deadline_time.isoformat() if gw.deadline_time else None,
+        "deadline": iso_utc(gw.deadline_time) if gw.deadline_time else None,
         "finished": gw.finished, "is_current": gw.is_current, "is_next": gw.is_next,
         "average_score": gw.average_entry_score,
     }
@@ -48,7 +49,7 @@ def last_updated(db: Session) -> list[dict]:
         {
             "source": r.source_name, "type": r.source_type, "status": r.status,
             "rows": r.rows, "detail": r.detail,
-            "fetched_at": r.fetched_at.isoformat() if r.fetched_at else None,
+            "fetched_at": iso_utc(r.fetched_at) if r.fetched_at else None,
         }
         for r in rows
     ]

@@ -1,7 +1,7 @@
 "use client";
 import { useApi } from "@/lib/api";
 import { useT } from "@/lib/i18n";
-import { timeAgo } from "@/lib/format";
+import { timeAgo, parseApiDate } from "@/lib/format";
 
 /** Nguồn gốc & phiên bản của dữ liệu đang hiển thị (spec §5: luôn nói rõ độ mới). */
 export function VersionBar({ compact = false }: { compact?: boolean }) {
@@ -11,7 +11,7 @@ export function VersionBar({ compact = false }: { compact?: boolean }) {
 
   const vnTime = (iso?: string | null) =>
     iso
-      ? new Date(iso).toLocaleString("vi-VN", {
+      ? parseApiDate(iso).toLocaleString("vi-VN", {
           timeZone: "Asia/Ho_Chi_Minh",
           dateStyle: "short",
           timeStyle: "short",
@@ -20,7 +20,7 @@ export function VersionBar({ compact = false }: { compact?: boolean }) {
 
   const vnDate = (iso?: string | null) =>
     iso
-      ? new Date(iso).toLocaleDateString("vi-VN", {
+      ? parseApiDate(iso).toLocaleDateString("vi-VN", {
           timeZone: "Asia/Ho_Chi_Minh",
           day: "2-digit",
           month: "2-digit",
@@ -68,7 +68,7 @@ export function VersionBar({ compact = false }: { compact?: boolean }) {
 
   const stale =
     data.last_data_update &&
-    Date.now() - new Date(data.last_data_update).getTime() > 12 * 3600 * 1000;
+    Date.now() - parseApiDate(data.last_data_update).getTime() > 12 * 3600 * 1000;
 
   return (
     <div
