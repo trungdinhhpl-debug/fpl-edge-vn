@@ -5,6 +5,7 @@ import { postJSON } from "@/lib/api";
 import { useT } from "@/lib/i18n";
 import { Card, CardContent, CardHeader, CardTitle, Button, Input, Select, Spinner, ErrorBox, Badge } from "@/components/ui";
 import { DecisionTree } from "@/components/decision-tree";
+import { FieldTilt } from "@/components/field-tilt";
 import { fmt, parseApiDate } from "@/lib/format";
 
 const PROFILES = [
@@ -17,6 +18,8 @@ export default function PlannerPage() {
   const { t } = useT();
   const [teamId, setTeamId] = useState("");
   const [horizon, setHorizon] = useState(5);
+  const [eoWeight, setEoWeight] = useState(0);
+  const [leagueId, setLeagueId] = useState<number | null>(null);
   const [result, setResult] = useState<any>(null);
   const [active, setActive] = useState("balanced");
   const [loading, setLoading] = useState(false);
@@ -51,6 +54,7 @@ export default function PlannerPage() {
       }
       const res = await postJSON("/api/optimizer/long-term", {
         squad_ids, bank: imp.bank, free_transfers: imp.free_transfers ?? 1, horizon, discount: 0.9,
+        eo_weight: eoWeight, league_id: leagueId,
       });
       setResult(res);
     } catch (e: any) {
@@ -78,6 +82,12 @@ export default function PlannerPage() {
         </Select>
         <Button onClick={build} disabled={!teamId || loading}>{loading ? "…" : t("buildPlan")}</Button>
       </div>
+
+      <FieldTilt
+        weight={eoWeight}
+        source={result?.field}
+        onChange={(w, lid) => { setEoWeight(w); setLeagueId(lid); }}
+      />
 
       {error && <ErrorBox error={error} />}
       {loading && <Spinner label="Đang giải bài toán tối ưu đa vòng (MILP)…" />}

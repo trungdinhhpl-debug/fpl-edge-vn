@@ -110,9 +110,30 @@ def test_wildcard_separates_horizon_points_from_next_gameweek(db):
     res = team_svc.optimize_wildcard(db, budget=1000, horizon=5, mode="balanced")
     cap = next(s for s in res["starting"] if s["is_captain"])
     expected = sum(s["xp"] for s in res["starting"]) + cap["xp"]
-    assert res["xi_xp_next"] == round(expected, 2)
+    assert res["xi_xp"] == round(expected, 2)
     # cả 5 vòng phải nhiều điểm hơn một vòng
-    assert res["xi_horizon_xp"] > res["xi_xp_next"]
+    assert res["xi_horizon_xp"] > res["xi_xp"]
+
+
+def test_reported_points_are_points_not_the_solver_objective(db):
+    """`xi_xp` phải luôn là điểm cộng từ xP thật, kể cả khi hàm mục tiêu bị nghiêng.
+
+    Trước đây nó là `result.xi_value` — trùng nhau khi mục tiêu còn là xP thuần,
+    nhưng bật núm EO lên thì giao diện sẽ hiện một con số bị bơm dưới nhãn "xP".
+    """
+    for weight in (0.0, 1.0, -1.0):
+        res = team_svc.optimize_free_hit(db, budget=1000, mode="max_ep", eo_weight=weight)
+        cap = next(s for s in res["starting"] if s["is_captain"])
+        expected = sum(s["xp"] for s in res["starting"]) + cap["xp"]
+        assert res["xi_xp"] == round(expected, 2), weight
+
+    # Nghiêng theo bất kỳ hướng nào cũng phải TRẢ GIÁ bằng điểm tuyệt đối, vì
+    # bản không nghiêng đã tối đa đúng đại lượng đó.
+    plain = team_svc.optimize_free_hit(db, budget=1000, mode="max_ep")["xi_xp"]
+    for weight in (1.0, -1.0):
+        tilted = team_svc.optimize_free_hit(
+            db, budget=1000, mode="max_ep", eo_weight=weight)["xi_xp"]
+        assert tilted <= plain + 1e-6, weight
 
 
 def test_long_term_returns_three_plans(db):

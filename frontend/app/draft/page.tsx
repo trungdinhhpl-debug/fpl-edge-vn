@@ -5,6 +5,7 @@ import { postJSON, useApi } from "@/lib/api";
 import { Card, CardContent, CardHeader, CardTitle, Button, Spinner, ErrorBox, Badge, Stat, Input } from "@/components/ui";
 import { Pitch } from "@/components/pitch";
 import { PosTag } from "@/components/fpl";
+import { FieldTilt } from "@/components/field-tilt";
 import { fmt } from "@/lib/format";
 
 const MODES = [
@@ -21,6 +22,8 @@ export default function DraftPage() {
   const [horizon, setHorizon] = useState(8);
   const [locked, setLocked] = useState<number[]>([]);
   const [excluded, setExcluded] = useState<number[]>([]);
+  const [eoWeight, setEoWeight] = useState(0);
+  const [leagueId, setLeagueId] = useState<number | null>(null);
   const [query, setQuery] = useState("");
   const [result, setResult] = useState<any>(null);
   const [loading, setLoading] = useState(false);
@@ -48,7 +51,10 @@ export default function DraftPage() {
     setLoading(true);
     setError(null);
     try {
-      setResult(await postJSON("/api/optimizer/wildcard", { mode, budget, horizon, locked, excluded }));
+      setResult(await postJSON("/api/optimizer/wildcard", {
+        mode, budget, horizon, locked, excluded,
+        eo_weight: eoWeight, league_id: leagueId,
+      }));
     } catch (e: any) {
       setError(String(e.message ?? e));
     } finally {
@@ -83,6 +89,12 @@ export default function DraftPage() {
           </button>
         ))}
       </div>
+
+      <FieldTilt
+        weight={eoWeight}
+        source={result?.field}
+        onChange={(w, lid) => { setEoWeight(w); setLeagueId(lid); }}
+      />
 
       {/* controls */}
       <Card>
@@ -201,7 +213,7 @@ export default function DraftPage() {
             <div className="space-y-4">
               <div className="grid grid-cols-2 gap-2">
                 <Stat label={`xP ${result.horizon} vòng (XI)`} value={fmt(result.xi_horizon_xp, 1)} />
-                <Stat label="xP vòng tới (có C)" value={fmt(result.xi_xp_next)} />
+                <Stat label="xP vòng tới (có C)" value={fmt(result.xi_xp)} />
                 <Stat label="Chi phí" value={`£${fmt(result.total_cost)}`} />
                 <Stat label="Còn dư" value={`£${fmt(budget / 10 - result.total_cost)}`} />
               </div>
@@ -231,6 +243,9 @@ export default function DraftPage() {
                       </span>
                       <span className="shrink-0 tabular-nums text-muted-foreground">
                         £{fmt(p.price)} · {fmt(p.xp_horizon, 1)}đ
+                        {p.field_eo !== undefined && (
+                          <span className="ml-1 text-xs"> · EO {fmt(p.field_eo, 0)}%</span>
+                        )}
                       </span>
                     </div>
                   ))}

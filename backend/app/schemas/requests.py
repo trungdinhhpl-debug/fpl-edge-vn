@@ -4,6 +4,23 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 
 
+class RankAware(BaseModel):
+    """Hai tham số chung cho mọi optimizer: nghiêng bao nhiêu, và so với ai.
+
+    Để ở một chỗ vì bốn endpoint phải hiểu chúng GIỐNG HỆT nhau — mỗi nơi khai
+    một kiểu là cách chắc chắn để hai trang cùng bật "đuổi hạng" mà ra hai nghĩa
+    khác nhau. Xem `services/field.py` để biết núm này thật sự làm gì (và không
+    làm gì).
+    """
+
+    # −1 nghiêng hẳn về đám đông (giữ thứ hạng), 0 kệ đám đông, +1 nghiêng hẳn ra
+    # khỏi đám đông (đuổi hạng). Mặc định 0: không ai bị đổi hành vi nếu không tự bật.
+    eo_weight: float = Field(0.0, ge=-1.0, le=1.0)
+    # Có mã giải thì EO là số ĐẾM ĐƯỢC từ đội hình đối thủ; không có thì rơi về
+    # EO toàn cầu (sở hữu thật + băng đội trưởng do mô hình).
+    league_id: int | None = Field(None, ge=1)
+
+
 class TeamImportRequest(BaseModel):
     team_id: int = Field(..., ge=1, description="FPL Team/Entry ID")
 
@@ -13,14 +30,14 @@ class TeamAnalyzeRequest(BaseModel):
     bank: int = Field(0, ge=0, description="Bank in tenths of a million")
 
 
-class NextGwRequest(BaseModel):
+class NextGwRequest(RankAware):
     squad_ids: list[int] = Field(..., min_length=15, max_length=15)
     bank: int = 0
     free_transfers: int = Field(1, ge=1, le=5)
     max_transfers: int = Field(2, ge=0, le=5)
 
 
-class LongTermRequest(BaseModel):
+class LongTermRequest(RankAware):
     squad_ids: list[int] = Field(..., min_length=15, max_length=15)
     bank: int = 0
     free_transfers: int = Field(1, ge=1, le=5)
@@ -28,7 +45,7 @@ class LongTermRequest(BaseModel):
     discount: float = Field(0.9, ge=0.5, le=1.0)
 
 
-class FreeHitRequest(BaseModel):
+class FreeHitRequest(RankAware):
     gameweek: int | None = None
     budget: int = Field(1000, ge=800, le=1200, description="Budget in tenths")
     mode: str = Field("max_ep", pattern="^(max_ep|balanced|aggressive)$")
@@ -62,7 +79,7 @@ class LeagueAnalyzeRequest(BaseModel):
     top_n: int = Field(30, ge=1, le=50)
 
 
-class WildcardRequest(BaseModel):
+class WildcardRequest(RankAware):
     budget: int = Field(1000, ge=800, le=1200)
     horizon: int = Field(6, ge=3, le=10)
     mode: str = Field("balanced", pattern="^(max_ep|balanced|aggressive)$")

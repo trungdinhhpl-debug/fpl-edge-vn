@@ -184,6 +184,11 @@ def list_players(db: Session, position: str | None = None, team_id: int | None =
             "xp_next3": round(xp3.get(p.id, 0.0), 2),
             "xp_next5": round(xp5.get(p.id, 0.0), 2),
             "value_next5": round(xp5.get(p.id, 0.0) / max(base["price"], 0.1), 2),
+            # Chuyển nhượng ròng vòng này — ĐỘNG LƯỢNG, không phải dự báo đổi giá.
+            # Ngưỡng đổi giá của FPL không công khai và co giãn theo tỷ lệ sở hữu,
+            # nên con số duy nhất trung thực ở đây là dòng người thật, còn việc
+            # nó có đủ để đổi giá hay không thì ta không biết (xem risk.price_risk).
+            "net_transfers": (p.transfers_in_event or 0) - (p.transfers_out_event or 0),
         }
         if min_xp and merged["xp_next5"] < min_xp:
             continue

@@ -8,6 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle, Button, Input, Spinner, Error
 import { PosTag, StatusDot } from "@/components/fpl";
 import { DeadlineCountdown } from "@/components/deadline-countdown";
 import { TransferVerdict } from "@/components/transfer-verdict";
+import { FieldTilt } from "@/components/field-tilt";
 import { fmt, parseApiDate } from "@/lib/format";
 import { riskBg } from "@/lib/utils";
 
@@ -22,6 +23,8 @@ export default function MyTeamPage() {
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [eoWeight, setEoWeight] = useState(0);
+  const [leagueId, setLeagueId] = useState<number | null>(null);
 
   useEffect(() => {
     const saved = localStorage.getItem("teamId");
@@ -71,11 +74,12 @@ export default function MyTeamPage() {
     }
   }
 
-  async function optimizeNext() {
+  async function optimizeNext(w: number = eoWeight, lid: number | null = leagueId) {
     setBusy("next"); setError(null);
     try {
       setNextGw(await postJSON("/api/optimizer/next-gameweek", {
         squad_ids: squadIds, bank: imported.bank, free_transfers: imported.free_transfers ?? 1, max_transfers: 2,
+        eo_weight: w, league_id: lid,
       }));
     } catch (e: any) { setError(String(e.message ?? e)); } finally { setBusy(null); }
   }
@@ -161,6 +165,16 @@ export default function MyTeamPage() {
             <Link href="/planner"><Button variant="outline">Kế hoạch 3–8 vòng</Button></Link>
             <Link href="/free-hit"><Button variant="outline">Build Free Hit</Button></Link>
           </div>
+
+          <FieldTilt
+            weight={eoWeight}
+            source={nextGw?.field}
+            onChange={(w, lid) => {
+              setEoWeight(w);
+              setLeagueId(lid);
+              if (nextGw) optimizeNext(w, lid);   // đã có kết quả thì tính lại ngay
+            }}
+          />
 
           {/* Squad */}
           <Card>

@@ -60,6 +60,7 @@ def opt_next_gw(req: NextGwRequest, db: Session = Depends(get_db)) -> dict:
     result = team_svc.optimize_next_gw(
         db, req.squad_ids, bank=req.bank, free_transfers=req.free_transfers,
         max_transfers=req.max_transfers,
+        eo_weight=req.eo_weight, league_id=req.league_id,
     )
     gw = planning_start_gw(db)
     result["run_id"] = _persist_run(db, "next_gw", gw, 1, req.model_dump(), result)
@@ -71,6 +72,7 @@ def opt_long_term(req: LongTermRequest, db: Session = Depends(get_db)) -> dict:
     result = team_svc.optimize_long_term(
         db, req.squad_ids, bank=req.bank, free_transfers=req.free_transfers,
         horizon=req.horizon, discount=req.discount,
+        eo_weight=req.eo_weight, league_id=req.league_id,
     )
     gw = planning_start_gw(db)
     result["run_id"] = _persist_run(db, "long_term", gw, req.horizon, req.model_dump(), result)
@@ -82,6 +84,7 @@ def opt_free_hit(req: FreeHitRequest, db: Session = Depends(get_db)) -> dict:
     result = team_svc.optimize_free_hit(
         db, gw=req.gameweek, budget=req.budget, mode=req.mode,
         locked=set(req.locked), excluded=set(req.excluded),
+        eo_weight=req.eo_weight, league_id=req.league_id,
     )
     gw = req.gameweek or planning_start_gw(db)
     result["run_id"] = _persist_run(db, "free_hit", gw, 1, req.model_dump(), result)
@@ -93,6 +96,7 @@ def opt_wildcard(req: WildcardRequest, db: Session = Depends(get_db)) -> dict:
     result = team_svc.optimize_wildcard(
         db, budget=req.budget, horizon=req.horizon, mode=req.mode,
         locked=set(req.locked), excluded=set(req.excluded),
+        eo_weight=req.eo_weight, league_id=req.league_id,
     )
     gw = planning_start_gw(db)
     result["run_id"] = _persist_run(db, "wildcard", gw, req.horizon, req.model_dump(), result)

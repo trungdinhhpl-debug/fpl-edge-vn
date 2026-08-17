@@ -5,6 +5,7 @@ import { postJSON } from "@/lib/api";
 import { useT } from "@/lib/i18n";
 import { Card, CardContent, CardHeader, CardTitle, Button, Spinner, ErrorBox, Badge, Stat } from "@/components/ui";
 import { Pitch } from "@/components/pitch";
+import { FieldTilt } from "@/components/field-tilt";
 import { fmt } from "@/lib/format";
 
 const MODES = [
@@ -17,16 +18,20 @@ export default function FreeHitPage() {
   const { t } = useT();
   const [mode, setMode] = useState("max_ep");
   const [budget, setBudget] = useState(1000);
+  const [eoWeight, setEoWeight] = useState(0);
+  const [leagueId, setLeagueId] = useState<number | null>(null);
   const [result, setResult] = useState<any>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  async function run(m: string) {
+  async function run(m: string, w: number = eoWeight, lid: number | null = leagueId) {
     setMode(m);
     setLoading(true);
     setError(null);
     try {
-      const res = await postJSON("/api/optimizer/free-hit", { mode: m, budget });
+      const res = await postJSON("/api/optimizer/free-hit", {
+        mode: m, budget, eo_weight: w, league_id: lid,
+      });
       setResult(res);
     } catch (e: any) {
       setError(String(e.message ?? e));
@@ -56,6 +61,12 @@ export default function FreeHitPage() {
           </button>
         ))}
       </div>
+
+      <FieldTilt
+        weight={eoWeight}
+        source={result?.field}
+        onChange={(w, lid) => { setEoWeight(w); setLeagueId(lid); run(mode, w, lid); }}
+      />
 
       <div className="flex items-center gap-2">
         <label className="text-sm text-muted-foreground">Ngân sách:</label>

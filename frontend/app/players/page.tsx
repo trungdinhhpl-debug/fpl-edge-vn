@@ -17,7 +17,8 @@ type SortKey =
   | "price"
   | "value_next5"
   | "selected_by_percent"
-  | "clean_sheet_prob";
+  | "clean_sheet_prob"
+  | "net_transfers";
 
 const SORT_OPTIONS: { key: SortKey; label: string }[] = [
   { key: "xp_next5", label: "xP 5 vòng" },
@@ -27,7 +28,14 @@ const SORT_OPTIONS: { key: SortKey; label: string }[] = [
   { key: "price", label: "Giá" },
   { key: "selected_by_percent", label: "Ownership" },
   { key: "clean_sheet_prob", label: "Xác suất sạch lưới" },
+  { key: "net_transfers", label: "Chuyển nhượng ròng" },
 ];
+
+// Số dòng hiện lúc đầu. Trước đây đây là một trần CỨNG ở 120 dòng: xếp mặc định
+// theo xP 5 vòng thì toàn bộ nhóm £4.0–4.5 — đám enabler bắt buộc phải có để
+// nuôi nổi hai premium — không bao giờ lọt vào màn hình, và người dùng không có
+// cách nào biết là mình đang bị cắt.
+const PAGE_SIZE = 150;
 
 export default function PlayersPage() {
   const { t } = useT();
@@ -38,6 +46,7 @@ export default function PlayersPage() {
   const [teamId, setTeamId] = useState("");
   const [sort, setSort] = useState<SortKey>("xp_next5");
   const [dir, setDir] = useState<SortDir>("desc");
+  const [showAll, setShowAll] = useState(false);
 
   const query =
     `/api/players?limit=1000` +
@@ -60,9 +69,10 @@ export default function PlayersPage() {
       );
     }
     const sign = dir === "asc" ? 1 : -1;
-    r = [...r].sort((a, b) => ((a[sort] ?? 0) - (b[sort] ?? 0)) * sign);
-    return r.slice(0, 120);
+    return [...r].sort((a, b) => ((a[sort] ?? 0) - (b[sort] ?? 0)) * sign);
   }, [data, q, sort, dir]);
+
+  const shown = showAll ? rows : rows.slice(0, PAGE_SIZE);
 
   /** Bấm tiêu đề cột: chọn cột mới (mặc định cao→thấp) hoặc đảo chiều cột đang xếp. */
   function toggleSort(key: SortKey) {
@@ -104,6 +114,8 @@ export default function PlayersPage() {
         <h1 className="text-2xl font-bold">{t("players")}</h1>
         <p className="text-sm text-muted-foreground">
           Lọc theo xP, xMins, giá trị, rủi ro — mọi cột đều dựa trên mô hình dữ liệu nền tảng.
+          Cột “CN ròng” là số người mua trừ số người bán trong vòng này: động lượng đám đông,
+          không phải dự báo đổi giá (ngưỡng đổi giá của FPL không công khai).
         </p>
       </div>
 
@@ -147,8 +159,17 @@ export default function PlayersPage() {
       <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
         <span>
           {loading ? "Đang lọc…" : `${rows.length} cầu thủ`}
-          {rows.length >= 120 && " (hiển thị 120 đầu tiên)"}
+          {!loading && shown.length < rows.length && ` · đang hiện ${shown.length}`}
         </span>
+        {!loading && rows.length > PAGE_SIZE && (
+          <button
+            type="button"
+            onClick={() => setShowAll((s) => !s)}
+            className="rounded-md border px-2 py-0.5 transition hover:bg-muted"
+          >
+            {showAll ? `Chỉ hiện ${PAGE_SIZE} đầu` : `Hiện tất cả ${rows.length}`}
+          </button>
+        )}
         {(q || pos || maxPrice || teamId) && (
           <button
             type="button"
@@ -186,10 +207,11 @@ export default function PlayersPage() {
                     {th("CS%", "clean_sheet_prob", "p-2 text-right")}
                     {th("Rủi ro", null, "p-2 text-center")}
                     {th("Own%", "selected_by_percent", "p-2 text-right")}
+                    {th("CN ròng", "net_transfers", "p-2 text-right")}
                   </tr>
                 </thead>
                 <tbody>
-                  {rows.map((p) => (
+                  {shown.map((p) => (
                     <tr
                       key={p.id}
                       onClick={() => router.push(`/players/${p.id}`)}
@@ -214,6 +236,15 @@ export default function PlayersPage() {
                       </td>
                       <td className="p-2 text-center"><RiskBadge level={p.overall_risk} /></td>
                       <td className="p-2 text-right tabular-nums text-muted-foreground">{fmt(p.selected_by_percent)}</td>
+                      <td
+                        className={cn(
+                          "p-2 text-right tabular-nums",
+                          (p.net_transfers ?? 0) > 0 ? "text-positive"
+                            : (p.net_transfers ?? 0) < 0 ? "text-danger" : "text-muted-foreground",
+                        )}
+                      >
+                        {p.net_transfers ? `${p.net_transfers > 0 ? "+" : "−"}${Math.abs(Math.round(p.net_transfers / 1000))}k` : "0"}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
