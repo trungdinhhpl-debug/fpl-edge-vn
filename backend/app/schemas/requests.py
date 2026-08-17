@@ -52,7 +52,22 @@ class ChatRequest(BaseModel):
     question: str = Field(..., min_length=1, max_length=500)
 
 
+class LeagueAnalyzeRequest(BaseModel):
+    """Mã giải classic; đội của bạn là tuỳ chọn (không có thì chỉ xem template)."""
+
+    league_id: int = Field(..., ge=1, description="Mã mini-league (classic)")
+    entry_id: int | None = Field(None, ge=1, description="Team ID của bạn")
+    squad_ids: list[int] = Field(default_factory=list, max_length=15)
+    # Mỗi đối thủ tốn một lệnh gọi API — xem MAX_RIVALS trong services/league.py.
+    top_n: int = Field(30, ge=1, le=50)
+
+
 class WildcardRequest(BaseModel):
     budget: int = Field(1000, ge=800, le=1200)
     horizon: int = Field(6, ge=3, le=10)
     mode: str = Field("balanced", pattern="^(max_ep|balanced|aggressive)$")
+    # Khoá/loại là cách người dùng đưa vào những gì mô hình không biết: một tin
+    # chuyển nhượng chưa vào dữ liệu, hay một cầu thủ họ nhất định không mua.
+    # Tối đa 14 khoá — khoá đủ 15 thì không còn bài toán tối ưu nào để giải.
+    locked: list[int] = Field(default_factory=list, max_length=14)
+    excluded: list[int] = Field(default_factory=list, max_length=200)

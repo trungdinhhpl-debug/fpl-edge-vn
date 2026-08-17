@@ -31,6 +31,9 @@ _realtest.db
 # generated static reports (regenerate with: python -m app.cli report)
 reports/
 
+# state của cảnh báo deadline: trạng thái cầu thủ lần chạy trước, riêng từng máy
+scripts/.deadline_alert_state.json
+
 # ---- local tooling ----
 # launch.json chứa đường dẫn tuyệt đối của máy dev, không dùng chung được
 .claude/

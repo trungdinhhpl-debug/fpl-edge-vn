@@ -102,6 +102,17 @@ class FPLClient:
     def entry_transfers(self, team_id: int) -> list[dict[str, Any]]:
         return self._get(f"/entry/{team_id}/transfers/")
 
+    # ---- Mini-league ----
+    def league_standings(self, league_id: int, page: int = 1) -> dict[str, Any]:
+        """Bảng xếp hạng một giải classic — 50 người mỗi trang.
+
+        Giải head-to-head dùng endpoint khác (`/leagues-h2h/`) và trả về cấu
+        trúc khác, nên gọi nhầm loại giải sẽ ra 404 chứ không ra dữ liệu sai.
+        """
+        return self._get(
+            f"/leagues-classic/{league_id}/standings/?page_standings={page}"
+        )
+
     # ---- helper: pull many element-summaries politely ----
     def element_summaries(self, player_ids: list[int]) -> dict[int, dict[str, Any]]:
         out: dict[int, dict[str, Any]] = {}

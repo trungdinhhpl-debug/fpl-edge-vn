@@ -13,6 +13,7 @@ from app.models import OptimizationRun
 from app.schemas import (
     ChipCalendarRequest,
     FreeHitRequest,
+    LeagueAnalyzeRequest,
     LongTermRequest,
     NextGwRequest,
     TeamAnalyzeRequest,
@@ -91,10 +92,33 @@ def opt_free_hit(req: FreeHitRequest, db: Session = Depends(get_db)) -> dict:
 def opt_wildcard(req: WildcardRequest, db: Session = Depends(get_db)) -> dict:
     result = team_svc.optimize_wildcard(
         db, budget=req.budget, horizon=req.horizon, mode=req.mode,
+        locked=set(req.locked), excluded=set(req.excluded),
     )
     gw = planning_start_gw(db)
     result["run_id"] = _persist_run(db, "wildcard", gw, req.horizon, req.model_dump(), result)
     return result
+
+
+@router.post("/league/analyze")
+def league_analyze(req: LeagueAnalyzeRequest, db: Session = Depends(get_db)) -> dict:
+    """EO đo được trong mini-league — xem app/services/league.py."""
+    from app.providers.fpl_client import FPLNotFound
+    from app.services.league import league_analysis
+
+    try:
+        return league_analysis(
+            db, req.league_id, squad_ids=req.squad_ids or None,
+            entry_id=req.entry_id, top_n=req.top_n,
+        )
+    except FPLNotFound:
+        # 404 ở đây gần như luôn là một trong hai: gõ nhầm mã, hoặc đây là giải
+        # head-to-head. Nói cả hai khả năng thay vì ném lỗi HTTP trần.
+        raise HTTPException(404, (
+            f"FPL không có giải classic nào mang mã {req.league_id}. Kiểm tra lại "
+            f"mã trong URL trang giải, và lưu ý giải head-to-head chưa hỗ trợ."
+        ))
+    except Exception as exc:
+        raise HTTPException(502, f"Không đọc được mini-league {req.league_id}: {exc}")
 
 
 @router.post("/chips/calendar")

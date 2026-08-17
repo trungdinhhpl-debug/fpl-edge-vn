@@ -180,26 +180,123 @@ def _free_hit_explanation(mode: str, payload: dict) -> dict:
 
 
 # ------------------------------------------------------------- Wildcard --------
+# Bench nặng hơn Free Hit: đội dựng bằng Wildcard phải sống qua nhiều vòng, nên
+# một ghế dự bị không đá được là gánh nặng lặp lại chứ không phải sai một lần.
+_WILDCARD_BENCH_WEIGHT = {"max_ep": 0.12, "balanced": 0.2, "aggressive": 0.15}
+
+
+def _wildcard_values(db: Session, gws: list[int], mode: str) -> dict[int, dict]:
+    """Giá trị cả horizon cho từng cầu thủ, theo đúng khẩu vị của `mode`.
+
+    Ba chế độ khác nhau ở chỗ chúng coi cái gì là "tốt", giống hệt cách
+    `build_opt_players` phân biệt chúng cho một vòng — chỉ khác là cộng dồn qua
+    horizon:
+
+      * max_ep     — tổng xP thuần.
+      * balanced   — trừ rủi ro phút thi đấu MỖI VÒNG, vì một người dễ mất suất
+                     làm bạn mất điểm lặp lại chứ không chỉ một lần.
+      * aggressive — cộng nửa phần ceiling vượt trên trung bình: đuổi hạng cần
+                     những tuần bùng nổ, không cần đều đặn.
+    """
+    rows = db.scalars(
+        select(PlayerProjection).where(PlayerProjection.gameweek.in_(gws))
+    ).all()
+    agg: dict[int, dict] = defaultdict(
+        lambda: {"xp": 0.0, "upside": 0.0, "risk": 0.0, "n_gw": 0}
+    )
+    for r in rows:
+        a = agg[r.player_id]
+        a["xp"] += r.xp
+        a["upside"] += max(0.0, r.mc_ceiling - r.xp)
+        a["risk"] += RISK_NUM.get(r.minutes_risk, 0.4)
+        a["n_gw"] += 1
+
+    out: dict[int, dict] = {}
+    for pid, a in agg.items():
+        if mode == "aggressive":
+            value = a["xp"] + 0.5 * a["upside"]
+        elif mode == "balanced":
+            value = max(0.0, a["xp"] - 0.25 * a["risk"])
+        else:
+            value = a["xp"]
+        out[pid] = {**a, "value": value}
+    return out
+
+
 def optimize_wildcard(db: Session, budget: int = 1000, horizon: int = 6,
-                      mode: str = "balanced") -> dict:
+                      mode: str = "balanced", locked: set[int] | None = None,
+                      excluded: set[int] | None = None) -> dict:
+    """Dựng 15 người từ con số 0 để tối đa điểm trên CẢ horizon.
+
+    Cũng chính là bài toán chọn đội đầu mùa: chưa có đội cũ nên không có ràng
+    buộc chuyển nhượng, chỉ còn ngân sách và luật đội hình.
+    """
     start = planning_start_gw(db)
     gws = list(range(start, start + horizon))
+    locked = set(locked or ())
+    excluded = set(excluded or ())
+
     players = {p.id: p for p in db.scalars(select(Player)).all()}
-    hx = horizon_xp(db, gws)
-    # value = summed horizon xP; captain value uses the first-GW ceiling
+    vals = _wildcard_values(db, gws, mode)
     projs0 = projections_for_gw(db, start)
+
     opt_players = []
     for pid, p in players.items():
-        value = hx.get(pid, 0.0)
-        cap_value = value + (projs0[pid].mc_ceiling if pid in projs0 else 0.0)
+        v = vals.get(pid, {}).get("value", 0.0)
+        # Băng đội trưởng nhân đôi điểm của MỘT vòng, không phải của cả horizon.
+        # Bản cũ đặt cap_value = giá trị horizon + ceiling, tức người được chọn
+        # làm đội trưởng được cộng thêm nguyên một horizon nữa — đủ để bóp méo
+        # cả 15 suất quanh một cái tên. Ở đây phần thưởng đội trưởng đúng bằng
+        # những gì nhân đôi mang lại ở vòng đầu tiên.
+        pr0 = projs0.get(pid)
+        cap_extra = 0.0
+        if pr0:
+            cap_extra = pr0.mc_ceiling if mode == "aggressive" else pr0.xp
         opt_players.append(OptPlayer(
             id=pid, element_type=p.element_type, price=p.now_cost, club=p.team_id,
-            value=round(value, 3), cap_value=round(cap_value, 3),
+            value=round(v, 3), cap_value=round(cap_extra, 3),
         ))
-    res = optimize_squad(opt_players, budget=budget, bench_weight=0.2)
+
+    # Một khoá trỏ vào người không có trong pool sẽ bị optimizer lặng lẽ bỏ qua,
+    # và người dùng chỉ thấy đội hình trả về thiếu đúng người họ vừa khoá mà
+    # không hiểu vì sao. Đối chiếu trước rồi báo lại thành dữ liệu.
+    pool_ids = {p.id for p in opt_players}
+    locked_ignored = sorted(locked - pool_ids)
+    locked_applied = sorted(locked & pool_ids)
+
+    res = optimize_squad(
+        opt_players, budget=budget,
+        bench_weight=_WILDCARD_BENCH_WEIGHT.get(mode, 0.2),
+        forced_in=set(locked_applied), forced_out=excluded,
+    )
     payload = _squad_payload(db, res, start)
-    payload.update({"gameweeks": gws, "horizon": horizon,
-                    "note": "Giá trị = tổng xP toàn horizon (đội hình giữ nguyên)."})
+
+    for row in payload["starting"] + payload["bench"]:
+        a = vals.get(row["id"], {})
+        row["xp_horizon"] = round(a.get("xp", 0.0), 2)
+        row["is_locked"] = row["id"] in locked
+
+    xi_horizon = sum(r["xp_horizon"] for r in payload["starting"])
+    cap = next((s for s in payload["starting"] if s.get("is_captain")), None)
+    payload.update({
+        "gameweeks": gws,
+        "horizon": horizon,
+        "mode": mode,
+        "budget": round(budget / 10.0, 1),
+        # Hai con số khác nhau, và trộn chúng là cách dễ nhất để tự lừa mình:
+        # một cái là cả horizon với đội hình đứng yên, một cái là điểm vòng tới.
+        "xi_horizon_xp": round(xi_horizon, 1),
+        "xi_xp_next": round(
+            sum(r["xp"] for r in payload["starting"]) + (cap["xp"] if cap else 0.0), 2
+        ),
+        "locked": locked_applied,
+        "locked_ignored": locked_ignored,
+        "excluded": sorted(excluded),
+        "note": (
+            f"Giá trị tối ưu = tổng xP {horizon} vòng (GW{gws[0]}–GW{gws[-1]}) với "
+            f"đội hình ĐỨNG YÊN — không tính chuyển nhượng về sau, không tính chip."
+        ),
+    })
     return payload
 
 

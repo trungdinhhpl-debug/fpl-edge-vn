@@ -5,6 +5,7 @@ import { useState } from "react";
 import {
   LayoutDashboard, Users, CalendarRange, CalendarCheck2, Crown, Search, Zap,
   Newspaper, MessageSquareQuote, BookOpen, Shield, Menu, X, Globe, Gauge,
+  Hammer, Trophy,
 } from "lucide-react";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { useT } from "@/lib/i18n";
@@ -13,6 +14,8 @@ import { cn } from "@/lib/utils";
 const items = [
   { href: "/", key: "dashboard", icon: LayoutDashboard },
   { href: "/my-team", key: "myTeam", icon: Shield },
+  { href: "/draft", key: "draft", icon: Hammer },
+  { href: "/league", key: "league", icon: Trophy },
   { href: "/planner", key: "planner", icon: CalendarRange },
   { href: "/chips", key: "chips", icon: CalendarCheck2 },
   { href: "/free-hit", key: "freeHit", icon: Zap },

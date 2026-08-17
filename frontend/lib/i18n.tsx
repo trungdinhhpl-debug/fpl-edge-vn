@@ -12,6 +12,8 @@ const dict: Record<string, { vi: string; en: string }> = {
   // nav
   dashboard: { vi: "Tổng quan", en: "Dashboard" },
   myTeam: { vi: "Đội của tôi", en: "My Team" },
+  draft: { vi: "Draft đội hình", en: "Squad Draft" },
+  league: { vi: "Mini-league", en: "Mini-league" },
   planner: { vi: "Kế hoạch dài hạn", en: "Long-term Planner" },
   chips: { vi: "Lịch chip", en: "Chip Calendar" },
   freeHit: { vi: "Free Hit Lab", en: "Free Hit Lab" },
