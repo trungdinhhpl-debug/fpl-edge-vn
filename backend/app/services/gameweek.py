@@ -82,13 +82,28 @@ def dashboard(db: Session) -> dict:
     top_predicted = [merge(pid) for pid in ranked[:10]]
 
     # top transfers in (market movement — NOT used as quality evidence)
-    top_in = sorted(players.values(), key=lambda p: p.transfers_in_event, reverse=True)[:8]
-    top_transfers = [
-        {**player_public(p, teams.get(p.team_id)),
-         "transfers_in_event": p.transfers_in_event,
-         "xp_next": round(projs[p.id].xp, 2) if p.id in projs else 0.0}
-        for p in top_in
-    ]
+    #
+    # Trước hạn chót vòng 1, FPL để `transfers_in_event` = 0 cho TẤT CẢ mọi người.
+    # Sắp xếp một cột toàn số 0 thì thứ tự rơi về id, và bảng "được mua nhiều
+    # nhất" hiện ra 6 cầu thủ cùng một CLB (id nhỏ nhất), trong đó có người đang
+    # chấn thương với xP 0.0 — một bảng xếp hạng bịa hoàn toàn, lại trông y như
+    # thật. Không có dữ liệu thì nói là không có.
+    max_in = max((p.transfers_in_event or 0) for p in players.values()) if players else 0
+    if max_in > 0:
+        top_in = sorted(players.values(), key=lambda p: p.transfers_in_event, reverse=True)[:8]
+        top_transfers = [
+            {**player_public(p, teams.get(p.team_id)),
+             "transfers_in_event": p.transfers_in_event,
+             "xp_next": round(projs[p.id].xp, 2) if p.id in projs else 0.0}
+            for p in top_in
+        ]
+        transfers_note = None
+    else:
+        top_transfers = []
+        transfers_note = (
+            "FPL chưa công bố lượt chuyển nhượng nào cho vòng này — mọi cầu thủ "
+            "đều đang ở 0. Bảng sẽ có dữ liệu sau khi vòng đầu tiên mở."
+        )
 
     caps = captain_ranking(db, start, limit=5)["lists"]["ev"]["players"]
     injuries = [n for n in news_feed(db, limit=40) if n["impact"] in ("Critical", "High")][:8]
@@ -98,6 +113,7 @@ def dashboard(db: Session) -> dict:
         "gameweek": gameweek_status(db),
         "top_predicted": top_predicted,
         "top_transfers_in": top_transfers,
+        "top_transfers_note": transfers_note,
         "captain_top": caps,
         "injury_alerts": injuries,
         "blank_double": bd,

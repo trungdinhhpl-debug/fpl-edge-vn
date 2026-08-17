@@ -270,8 +270,40 @@ def player_detail(db: Session, player_id: int) -> dict | None:
         "player": base,
         "horizon": horizon,
         "underlying": underlying,
+        # Các tổng ở `underlying` KHÔNG phải lúc nào cũng của mùa đang chạy: trước
+        # khi vòng 1 kết thúc, FPL vẫn phát tổng của mùa TRƯỚC. Engine đã biết điều
+        # này (nó quy đổi luật BPS theo đó) nhưng API thì chưa từng nói ra, nên
+        # giao diện dán nhãn "mùa này" lên một đống số của mùa khác.
+        "underlying_season": _underlying_season(db),
         "expert_signals": expert,
         "verdict": verdict,
+    }
+
+
+def _underlying_season(db: Session) -> dict:
+    from app import scoring
+    from app.services.season_state import stats_season
+
+    season = stats_season(db)
+    current = scoring.SEASON
+    # `stats_season` chỉ trả None ở đúng một nhánh: chưa vòng nào kết thúc VÀ
+    # không suy ra được tên mùa trước. Nghĩa là None đã đủ để biết đây là mùa
+    # TRƯỚC — chỉ thiếu cái tên. Đừng để thiếu tên kéo theo mất luôn thông tin
+    # chính ("chưa xác định được mùa" là câu trả lời tệ hơn hẳn "mùa trước").
+    is_current = bool(season) and season == current
+    named = bool(season) and season != "—"
+    which = "mùa này" if is_current else "mùa trước"
+    label = f"{which} ({season})" if named else which
+    return {
+        "season": season,
+        "current_season": current,
+        "is_current_season": is_current,
+        "label": label,
+        "note": None if is_current else (
+            "FPL chưa xoá tổng của mùa trước — các con số dưới đây được kiếm ở "
+            "mùa khác, dưới lịch khác và (với BPS) luật khác. Chúng sẽ tự về 0 "
+            "rồi chạy lại theo mùa mới khi FPL chuyển sổ."
+        ),
     }
 
 

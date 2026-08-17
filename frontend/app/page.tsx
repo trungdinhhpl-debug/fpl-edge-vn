@@ -139,17 +139,25 @@ export default function Dashboard() {
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-1.5">
-            {data.top_transfers_in?.slice(0, 6).map((p: any) => (
-              <div key={p.id} className="flex items-center justify-between text-sm">
-                <span className="font-medium">{p.name} <span className="text-muted-foreground">· {p.team}</span></span>
-                <span className="tabular-nums text-muted-foreground">
-                  +{(p.transfers_in_event / 1000).toFixed(0)}k · xP {fmt(p.xp_next)}
-                </span>
-              </div>
-            ))}
-            <p className="pt-1 text-[11px] text-muted-foreground">
-              * Lượt mua chỉ phản ánh đám đông, không phải bằng chứng cầu thủ tốt.
-            </p>
+            {data.top_transfers_note ? (
+              // Ô trống nói đúng sự thật; một bảng xếp hạng dựng từ toàn số 0 thì
+              // nói sai mà lại trông đáng tin hơn.
+              <p className="text-sm text-muted-foreground">{data.top_transfers_note}</p>
+            ) : (
+              <>
+                {data.top_transfers_in?.slice(0, 6).map((p: any) => (
+                  <div key={p.id} className="flex items-center justify-between text-sm">
+                    <span className="font-medium">{p.name} <span className="text-muted-foreground">· {p.team}</span></span>
+                    <span className="tabular-nums text-muted-foreground">
+                      +{(p.transfers_in_event / 1000).toFixed(0)}k · xP {fmt(p.xp_next)}
+                    </span>
+                  </div>
+                ))}
+                <p className="pt-1 text-[11px] text-muted-foreground">
+                  * Lượt mua chỉ phản ánh đám đông, không phải bằng chứng cầu thủ tốt.
+                </p>
+              </>
+            )}
           </CardContent>
         </Card>
 

@@ -121,7 +121,14 @@ export default function PlayerDetail() {
       <div className="grid gap-6 lg:grid-cols-2">
         {/* Underlying */}
         <Card>
-          <CardHeader><CardTitle>Dữ liệu nền tảng (mùa này)</CardTitle></CardHeader>
+          <CardHeader>
+            <CardTitle>Dữ liệu nền tảng · {data.underlying_season?.label ?? "—"}</CardTitle>
+          </CardHeader>
+          {data.underlying_season?.note && (
+            <div className="mx-6 mb-2 rounded-md border border-caution/40 bg-caution/10 p-2 text-xs text-caution">
+              {data.underlying_season.note}
+            </div>
+          )}
           <CardContent className="grid grid-cols-2 gap-2 text-sm sm:grid-cols-3">
             <UStat label="xG" value={fmt(u.expected_goals, 2)} />
             <UStat label="xA" value={fmt(u.expected_assists, 2)} />
