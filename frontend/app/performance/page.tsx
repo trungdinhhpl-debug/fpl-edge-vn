@@ -12,7 +12,7 @@ import {
  * khiến người đọc chờ một con số không bao giờ tới.
  */
 export default function PerformancePage() {
-  const { data, error } = useApi<any>("/api/model/performance");
+  const { data, error, reload } = useApi<any>("/api/model/performance");
   const st = data?.state ?? {};
 
   // Tiêu đề luôn hiển thị, kể cả khi đang tải hoặc lỗi. Bản đầu return sớm nên
@@ -35,7 +35,7 @@ export default function PerformancePage() {
     return (
       <div className="space-y-4">
         {header}
-        <ErrorBox error={String(error)} />
+        <ErrorBox error={String(error)} onRetry={reload} />
         <p className="text-xs text-muted-foreground">
           Nếu backend vừa được cập nhật, endpoint <code>/api/model/performance</code> có
           thể chưa sống. Thử lại sau vài phút.

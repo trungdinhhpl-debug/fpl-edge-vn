@@ -60,10 +60,10 @@ function ConsensusBar({ p }: { p: any }) {
 
 export default function ExpertsPage() {
   const { t } = useT();
-  const { data, loading, error } = useApi<any>("/api/expert-consensus");
+  const { data, loading, error, reload } = useApi<any>("/api/expert-consensus");
 
   if (loading) return <Spinner label={t("loading")} />;
-  if (error) return <ErrorBox error={error} />;
+  if (error) return <ErrorBox error={error} onRetry={reload} />;
   if (!data) return null;
 
   return (

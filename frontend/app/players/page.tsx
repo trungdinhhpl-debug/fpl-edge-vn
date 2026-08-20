@@ -53,7 +53,7 @@ export default function PlayersPage() {
     (pos ? `&position=${pos}` : "") +
     (maxPrice ? `&max_price=${maxPrice}` : "") +
     (teamId ? `&team_id=${teamId}` : "");
-  const { data, loading, error } = useApi<any>(query);
+  const { data, loading, error, reload } = useApi<any>(query);
   const { data: teamData } = useApi<any>("/api/teams");
 
   const rows = useMemo(() => {
@@ -189,7 +189,7 @@ export default function PlayersPage() {
       {loading ? (
         <Spinner label={t("loading")} />
       ) : error ? (
-        <ErrorBox error={error} />
+        <ErrorBox error={error} onRetry={reload} />
       ) : (
         <Card>
           <CardContent className="p-0">

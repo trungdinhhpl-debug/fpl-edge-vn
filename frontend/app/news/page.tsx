@@ -61,7 +61,7 @@ export default function NewsPage() {
   const [tier, setTier] = useState("");
   const qs = [`limit=150`, impact && `impact=${impact}`, tier && `tier=${tier}`]
     .filter(Boolean).join("&");
-  const { data, loading, error } = useApi<any>(`/api/news?${qs}`);
+  const { data, loading, error, reload } = useApi<any>(`/api/news?${qs}`);
 
   return (
     <div className="space-y-4">
@@ -129,7 +129,7 @@ export default function NewsPage() {
         )}
       </div>
 
-      {loading ? <Spinner label={t("loading")} /> : error ? <ErrorBox error={error} /> : (
+      {loading ? <Spinner label={t("loading")} /> : error ? <ErrorBox error={error} onRetry={reload} /> : (
         <div className="space-y-2">
           {data?.items?.length ? data.items.map((n: any, i: number) => (
             <Card key={`${n.player_id}-${i}`}>

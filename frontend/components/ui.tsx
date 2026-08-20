@@ -119,10 +119,25 @@ export function Spinner({ label }: { label?: string }) {
   );
 }
 
-export function ErrorBox({ error }: { error: string }) {
+export function ErrorBox({
+  error,
+  onRetry,
+}: {
+  error: string;
+  onRetry?: () => void;
+}) {
   return (
-    <div className="rounded-md border border-danger/40 bg-danger/10 p-3 text-sm text-danger">
-      {error}
+    <div className="space-y-3 rounded-md border border-danger/40 bg-danger/10 p-3 text-sm text-danger">
+      <p>{error}</p>
+      {onRetry && (
+        <button
+          type="button"
+          onClick={onRetry}
+          className="rounded-md border border-danger/50 px-3 py-1.5 text-xs font-medium transition hover:bg-danger/15"
+        >
+          Thử lại
+        </button>
+      )}
     </div>
   );
 }

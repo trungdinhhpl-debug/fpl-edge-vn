@@ -51,7 +51,7 @@ export default function FixturesPage() {
   const [sort, setSort] = useState<SortKey>("fdr");
   // Điểm lịch: CAO = lịch dễ, nên mặc định xếp giảm dần (dễ nhất lên đầu).
   const [dir, setDir] = useState<SortDir>("desc");
-  const { data, loading, error } = useApi<any>("/api/fixtures/ticker?n_gws=8");
+  const { data, loading, error, reload } = useApi<any>("/api/fixtures/ticker?n_gws=8");
 
   // hooks phải chạy trước mọi return sớm
   const rows = useMemo(() => {
@@ -83,7 +83,7 @@ export default function FixturesPage() {
   }, [data, sort, dir, view]);
 
   if (loading) return <Spinner label={t("loading")} />;
-  if (error) return <ErrorBox error={error} />;
+  if (error) return <ErrorBox error={error} onRetry={reload} />;
   if (!data) return null;
 
   const gws = data.gameweeks as number[];

@@ -1,8 +1,10 @@
 """FastAPI application entrypoint."""
 from __future__ import annotations
 
+import asyncio
 import logging
 import threading
+import time
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -27,12 +29,8 @@ def _db_is_empty() -> bool:
     return n == 0
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    init_db()
-    log.info("Database initialised (%s)", settings.database_url.split("://")[0])
-
-    # nạp luật mùa hiện tại đã lưu (không ghi cứng trong code)
+def _load_rules() -> None:
+    """Nạp luật mùa hiện tại đã lưu (không ghi cứng trong code)."""
     try:
         from app import scoring
         with SessionLocal() as db:
@@ -41,6 +39,21 @@ async def lifespan(app: FastAPI):
                  info.get("season"), info.get("rules_version"), info.get("source"))
     except Exception as exc:
         log.warning("Could not load season rules (%s) — using fallback.", exc)
+
+
+def _db_bootstrap(app: FastAPI) -> None:
+    """Mọi việc cần một kết nối DB sống.
+
+    Tách riêng để chạy được ở hai nơi: ngay lúc khởi động, và trong luồng thử
+    lại nếu lúc đó DB chưa tới được. Ném exception nếu DB vẫn hỏng — người gọi
+    quyết định xử lý thế nào.
+    """
+    init_db()
+    app.state.db_ready = True
+    app.state.db_error = None
+    log.info("Database initialised (%s)", settings.database_url.split("://")[0])
+
+    _load_rules()
 
     if settings.auto_sync_on_startup and _db_is_empty():
         log.info("Empty DB detected — starting initial FPL sync in the background...")
@@ -58,6 +71,53 @@ async def lifespan(app: FastAPI):
         # run off the startup path so the server binds its port immediately
         # (cloud platforms health-check the port and would otherwise time out)
         threading.Thread(target=_initial_sync, name="initial-sync", daemon=True).start()
+
+
+def _db_startup(app: FastAPI, ready: threading.Event) -> None:
+    """Dựng DB trong luồng riêng, thử lại mãi, giãn dần 5s → 5 phút.
+
+    Chạy ngoài luồng khởi động vì một DB không tới được KHÔNG phải lúc nào cũng
+    báo lỗi: nếu gói tin bị nuốt (đúng kiểu hỏng hay gặp ở DB đám mây) thì lệnh
+    kết nối treo im chứ không ném exception, và try/except quanh nó vô dụng.
+    Đặt hẳn sang luồng khác thì cổng luôn mở được, hỏng kiểu gì cũng vậy.
+    """
+    delay = 5
+    while True:
+        try:
+            _db_bootstrap(app)
+            ready.set()
+            return
+        except Exception as exc:
+            app.state.db_error = str(exc)
+            ready.set()  # mở cổng ngay, đừng bắt cả service chờ DB
+            log.warning("DB unreachable (%s) — retrying in %ss.", exc, delay)
+            time.sleep(delay)
+            delay = min(delay * 2, 300)
+
+
+# DB lành thì dựng xong trong vài chục mili-giây; chờ một nhịp ngắn để giữ
+# nguyên hành vi cũ (bảng có sẵn trước request đầu tiên). Quá hạn này thì mở
+# cổng và phục vụ ở chế độ degraded — thà báo được bệnh còn hơn chết câm.
+STARTUP_DB_WAIT_S = 10.0
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    app.state.db_ready = False
+    app.state.db_error = None
+
+    ready = threading.Event()
+    threading.Thread(
+        target=_db_startup, args=(app, ready), name="db-startup", daemon=True
+    ).start()
+
+    # chờ trong executor để không chặn event loop
+    await asyncio.get_running_loop().run_in_executor(None, ready.wait, STARTUP_DB_WAIT_S)
+    if not app.state.db_ready:
+        log.error(
+            "Database chưa sẵn sàng sau %.0fs — mở cổng và trả 'degraded' ở "
+            "/api/health; luồng nền vẫn đang thử lại.", STARTUP_DB_WAIT_S,
+        )
 
     if settings.enable_scheduler:
         _start_scheduler(app)

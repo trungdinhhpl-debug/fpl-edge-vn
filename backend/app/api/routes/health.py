@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, BackgroundTasks, Depends
+from fastapi import APIRouter, BackgroundTasks, Depends, Request
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -24,9 +24,30 @@ router = APIRouter()
 
 
 @router.get("/health")
-def health() -> dict:
-    return {"status": "ok", "app": settings.app_name, "season": scoring.SEASON,
-            "time": datetime.now(timezone.utc).isoformat()}
+def health(request: Request) -> dict:
+    """Liveness + tình trạng DB.
+
+    Luôn trả 200 kể cả khi DB hỏng: tiến trình vẫn sống thật, và một health
+    check trả lỗi chỉ khiến nền tảng khởi động lại vô ích. Trạng thái thật nằm
+    ở trường `status` ("ok" | "degraded") để người đọc log phân biệt được
+    "app chết" với "app sống nhưng mất DB".
+    """
+    db_ready = getattr(request.app.state, "db_ready", True)
+    out = {
+        "status": "ok" if db_ready else "degraded",
+        "app": settings.app_name,
+        "season": scoring.SEASON,
+        "db": "ok" if db_ready else "unreachable",
+        "time": datetime.now(timezone.utc).isoformat(),
+    }
+    if not db_ready:
+        # DB treo im (không ném lỗi) thì db_error còn rỗng — vẫn phải nói được
+        # là đang ở tình trạng nào, chứ không trả về một chỗ trống khó hiểu.
+        out["db_error"] = (
+            getattr(request.app.state, "db_error", None)
+            or "chưa có phản hồi từ máy chủ dữ liệu (đang thử lại nền)"
+        )
+    return out
 
 
 @router.get("/model/health")

@@ -12,7 +12,10 @@ services:
     dockerfilePath: ./backend/Dockerfile
     dockerContext: ./backend
     plan: free
-    healthCheckPath: /api/health
+    # KHÔNG khai healthCheckPath trên gói free: Render sẽ ping đường dẫn đó mỗi
+    # 5 giây suốt thời gian service thức, đổi lấy cơ chế tự khởi động lại mà gói
+    # free vốn không đảm bảo. Bỏ đi thì service ngủ sau ~15 phút như thiết kế,
+    # tiêu vài chục giờ instance mỗi tháng thay vì gần 720.
     envVars:
       # paste your Neon connection string in the Render dashboard when prompted
       - key: DATABASE_URL

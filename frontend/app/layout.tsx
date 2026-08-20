@@ -5,6 +5,7 @@ import { Nav } from "@/components/nav";
 import { ChatWidget } from "@/components/chat-widget";
 import { VersionBar } from "@/components/version-bar";
 import { SeasonBanner } from "@/components/season-banner";
+import { WakeBanner } from "@/components/wake-banner";
 
 export const metadata: Metadata = {
   title: "FPL Edge VN — Quyết định FPL dựa trên dữ liệu",
@@ -19,6 +20,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <Providers>
           <Nav />
           <main className="mx-auto max-w-7xl px-4 py-6">
+            <WakeBanner />
             <SeasonBanner />
             {children}
           </main>

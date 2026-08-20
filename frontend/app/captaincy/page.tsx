@@ -34,7 +34,7 @@ function ConfTag({ label }: { label: string }) {
 
 export default function CaptaincyPage() {
   const { t } = useT();
-  const { data, loading, error } = useApi<any>("/api/captains?limit=12");
+  const { data, loading, error, reload } = useApi<any>("/api/captains?limit=12");
   const [active, setActive] = useState("ev");
   const [aId, setAId] = useState<string>("");
   const [bId, setBId] = useState<string>("");
@@ -44,7 +44,7 @@ export default function CaptaincyPage() {
   const { data: cmp, loading: cmpLoading } = useApi<any>(cmpUrl);
 
   if (loading) return <Spinner label={t("loading")} />;
-  if (error) return <ErrorBox error={error} />;
+  if (error) return <ErrorBox error={error} onRetry={reload} />;
   if (!data) return null;
 
   const list = data.lists[active];
