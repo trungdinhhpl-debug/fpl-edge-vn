@@ -29,7 +29,7 @@ export function SeasonBanner() {
           Dữ liệu PL mùa này: <b>{s.matches_played} trận</b>
         </span>
         <span className="text-sm">
-          Phần lớn xMins dựa trên prior &amp; preseason:{" "}
+          xMins chưa dựa trên trận đã đá mùa này:{" "}
           <b>{s.prior_based_share_pct}%</b>
         </span>
         <span className="text-sm">

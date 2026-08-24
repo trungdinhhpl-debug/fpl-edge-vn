@@ -95,7 +95,15 @@ def rotation_risk(p_start: float, recent_minutes: list[int] | None) -> dict:
         score = min(1.0, score + 0.4 * min(1.0, sd / 45.0))
         basis += f", độ lệch phút {len(recent)} vòng gần nhất {sd:.0f}'"
     else:
-        basis += ", chưa có số phút từng vòng để đo dao động"
+        # Hai trạng thái khác nhau, và gộp chúng làm câu này nói ngược với
+        # `source_freshness.has_gameweek_detail` ngay trong cùng một phản hồi:
+        # bảng ĐÃ có số phút từng vòng, chỉ là mới một hai vòng nên chưa có gì
+        # để tính độ lệch chuẩn.
+        n = len(recent_minutes or [])
+        if n:
+            basis += f", mới {n} vòng nên chưa đo được dao động"
+        else:
+            basis += ", chưa có số phút từng vòng để đo dao động"
 
     level = "Thấp" if score < 0.25 else "Trung bình" if score < 0.55 else "Cao"
     return {"level": level, "score": round(score, 3), "basis": basis}
