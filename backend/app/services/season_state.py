@@ -76,6 +76,42 @@ def is_played(fixture: Fixture) -> bool:
     return bool(fixture.finished or fixture.finished_provisional)
 
 
+def last_completed_gameweek(db: Session) -> int | None:
+    """Vòng gần nhất đã đá XONG TOÀN BỘ — không phải vòng đã đá trận nào.
+
+    Hai câu hỏi khác nhau và trang hay lẫn: vòng 1 mùa 2026/27 trải từ 21/08 đến
+    24/08, nên suốt ba ngày đó vòng đã bắt đầu mà chưa xong. Trả về 1 trong khoảng
+    ấy là nói với người đọc rằng số liệu vòng 1 đã chốt, trong khi còn trận chưa
+    đá. `matches_played` mới là thứ đo tiến độ; trường này đo cái đã đóng lại.
+
+    Trả None khi chưa vòng nào trọn vẹn — KHÔNG trả 0: vòng 0 không tồn tại, và
+    một con số giả sẽ lặng lẽ đi vào phép trừ ở phía đọc.
+    """
+    total: dict[int, int] = {}
+    done: dict[int, int] = {}
+    for f in db.scalars(select(Fixture).where(Fixture.event.isnot(None))).all():
+        total[f.event] = total.get(f.event, 0) + 1
+        if is_played(f):
+            done[f.event] = done.get(f.event, 0) + 1
+    complete = [gw for gw, n in total.items() if done.get(gw, 0) == n]
+    return max(complete) if complete else None
+
+
+def data_as_of(db: Session):
+    """Lần cuối lấy được dữ liệu từ FPL — mốc mà mọi con số trên trang phản ánh.
+
+    Đọc từ `source_fetch_logs` chứ không phải từ `updated_at` của từng hàng: hàng
+    không đổi giá trị thì không được ghi lại, nên thời điểm cập nhật hàng trả lời
+    "lần cuối số này THAY ĐỔI", không phải "lần cuối ta còn biết số này đúng".
+    """
+    from app.models import SourceFetchLog
+
+    return db.scalar(
+        select(func.max(SourceFetchLog.fetched_at))
+        .where(SourceFetchLog.source_name.like("FPL%"))
+    )
+
+
 def _configured_ids(raw: str) -> set[str]:
     return {p.strip().upper() for p in (raw or "").split(",") if p.strip()}
 
@@ -176,12 +212,19 @@ def season_state(db: Session) -> dict:
     managers = new_manager_clubs()
     signings = new_signing_players()
 
+    from app.services.common import iso_utc
+
+    fetched = data_as_of(db)
     return {
         "phase": phase,
         "label": label,
         "is_preseason": phase == "preseason",
         "system_confidence": confidence,
         "matches_played": finished,
+        # Vòng đã ĐÓNG hẳn, khác `matches_played` vốn đếm tiến độ đang chạy.
+        "last_completed_gw": last_completed_gameweek(db),
+        # Mốc thời gian của dữ liệu, đi kèm chính những con số nó sinh ra.
+        "data_as_of": iso_utc(fetched) if fetched else None,
         "max_team_matches": max_team_matches,
         "matches_until_established": max(0, EARLY_SEASON_MATCHES - max_team_matches),
         "prior_based_share_pct": prior_share,

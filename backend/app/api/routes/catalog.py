@@ -16,6 +16,7 @@ from app.services.gameweek import dashboard, gameweek_status
 from app.services.experts import expert_consensus
 from app.services.news import news_centre, news_feed
 from app.services.players import compare_players, list_players, player_detail
+from app.services.season_state import data_as_of, last_completed_gameweek
 
 router = APIRouter()
 
@@ -39,7 +40,15 @@ def get_players(
     limit: int = Query(800, le=1000),
     db: Session = Depends(get_db),
 ) -> dict:
-    return {"players": list_players(db, position, team_id, max_price, min_xp, limit)}
+    # Con số đi kèm mốc của chính nó. Trang /players là nơi người đọc so xP giữa
+    # các cầu thủ, nên "tính đến lúc nào" và "vòng nào đã đóng" phải nằm trong
+    # cùng một phản hồi, không phải ở một endpoint khác mà giao diện có thể quên gọi.
+    fetched = data_as_of(db)
+    return {
+        "players": list_players(db, position, team_id, max_price, min_xp, limit),
+        "data_as_of": iso_utc(fetched) if fetched else None,
+        "last_completed_gw": last_completed_gameweek(db),
+    }
 
 
 @router.get("/players/compare")

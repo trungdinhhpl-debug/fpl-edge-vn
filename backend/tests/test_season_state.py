@@ -303,3 +303,42 @@ def test_not_played_condition_keeps_null_rows(db):
             by_id[fid].finished_provisional = was_prov
         db.flush()
         db.rollback()
+
+
+def test_last_completed_gw_waits_for_the_whole_round(db):
+    """Vòng đã đá 9/10 trận là vòng CHƯA xong.
+
+    Vòng 1 mùa 2026/27 trải từ 21/08 đến 24/08. Nếu trường này trả 1 ngay khi trận
+    đầu tiên kết thúc, nó nói rằng số liệu vòng 1 đã chốt trong khi còn trận chưa
+    đá — đúng loại nhầm lẫn mà `matches_played` (đo tiến độ) sinh ra khi bị dùng
+    thay cho "vòng nào đã đóng".
+    """
+    from sqlalchemy import select
+
+    from app.models import Fixture
+    from app.services.season_state import last_completed_gameweek, season_state
+
+    fixtures = db.scalars(select(Fixture).where(Fixture.event.isnot(None))).all()
+    original = [(f.id, f.finished, f.finished_provisional) for f in fixtures]
+    gw = min(f.event for f in fixtures)
+    in_gw = [f for f in fixtures if f.event == gw]
+    assert len(in_gw) >= 2, "cần ít nhất 2 trận trong một vòng thì phép thử mới nói gì"
+    try:
+        for f in fixtures:
+            f.finished, f.finished_provisional = False, False
+        for f in in_gw[:-1]:                  # đá hết trừ một trận
+            f.finished_provisional = True
+        db.flush()
+        assert last_completed_gameweek(db) is None
+        assert season_state(db)["matches_played"] == len(in_gw) - 1
+
+        in_gw[-1].finished_provisional = True   # trận cuối cùng khép vòng lại
+        db.flush()
+        assert last_completed_gameweek(db) == gw
+        assert season_state(db)["last_completed_gw"] == gw
+    finally:
+        by_id = {f.id: f for f in fixtures}
+        for fid, was, prov in original:
+            by_id[fid].finished, by_id[fid].finished_provisional = was, prov
+        db.flush()
+        db.rollback()
