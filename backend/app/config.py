@@ -164,7 +164,7 @@ class Settings(BaseSettings):
     #   theo độ khó trận yếu hơn bóng sống, và bỏ `pen_bump` vốn đếm hai lần. Vòng
     #   đôi: thêm xoay tua (tương quan âm giữa hai lần đá chính, giữ nguyên biên
     #   duyên nên xP không đổi — chỉ phương sai đổi) và mệt mỏi ở trận thứ hai.
-    model_version: str = "xp-0.7.0"
+    model_version: str = "xp-0.8.0"
 
     @property
     def cors_list(self) -> list[str]:

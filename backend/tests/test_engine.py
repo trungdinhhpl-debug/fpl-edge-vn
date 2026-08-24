@@ -786,3 +786,30 @@ def test_sample_size_risk_is_measured_against_what_was_playable():
 
     # không biết đội đá bao nhiêu trận thì không đoán: giữ nguyên nhánh tuyệt đối
     assert performance_risk(minutes_season=90, **common) != "Low"
+
+
+def test_defcon_responds_to_the_opponent_but_only_as_much_as_measured():
+    """Defcon phải nhìn đối thủ — và chỉ nhúc nhích đúng mức số liệu cho phép.
+
+    Hai hồi quy khoá cùng lúc, vì sửa cái này rất dễ đẻ ra cái kia:
+
+    1. Bản cũ KHÔNG có hệ số nào, nên một hậu vệ ra đúng cùng một xác suất defcon
+       ở mọi vòng — gặp Man City hay gặp đội cuối bảng cũng vậy.
+    2. Cách sửa theo trực giác là tỷ lệ thuận như `shot_adj` (số cú cứu thua).
+       Số liệu nói không: đo 272 cầu thủ ≥900 phút mùa 2025/26, nhóm thủng lưới
+       nhiều nhất nhận ×1.77 bàn thua nhưng chỉ ×1.04 hành động phòng ngự. Tỷ lệ
+       thuận sẽ đổi một cột SAI VÌ BẤT ĐỘNG thành một cột SAI VÌ QUÁ NHẠY.
+    """
+    from app.engine.xpoints import _defcon_fixture_adj
+
+    easy, hard = _defcon_fixture_adj(0.6), _defcon_fixture_adj(2.0)
+    assert hard > easy                      # (1) không còn bất động
+
+    # (2) λ gấp ~3.3 lần chỉ được kéo hệ số lên dưới 25% — xa mức tỷ lệ thuận
+    assert hard / easy < 1.25
+    assert hard / easy > 1.05               # nhưng vẫn phải nhúc nhích thật
+
+    # mốc tham chiếu là trung tính, và λ vô lý bị chặn chứ không lan ra ngoài
+    assert abs(_defcon_fixture_adj(1.3) - 1.0) < 1e-9
+    assert 0.80 <= _defcon_fixture_adj(0.001) <= 1.20
+    assert 0.80 <= _defcon_fixture_adj(99.0) <= 1.20

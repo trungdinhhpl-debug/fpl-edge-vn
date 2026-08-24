@@ -66,6 +66,43 @@ def _shrink(rate: float, prior: float, minutes: float) -> float:
     return w * rate + (1 - w) * prior
 
 
+# Mốc bàn thua mỗi đội mỗi trận, dùng làm gốc cho hệ số defcon. Giữ bằng mốc của
+# `shot_adj` (số cú cứu thua) để hai hệ số cùng nói về một thứ: sức ép phải chống.
+DEFCON_LAMBDA_REF = 1.3
+
+# ĐỘ CO GIÃN của hành động phòng ngự theo bàn thua kỳ vọng — ĐO ĐƯỢC, không đặt.
+#
+# Trực giác nói nên dùng dạng tỷ lệ thuận như `shot_adj`; số liệu nói ngược lại.
+# Đo trên 272 cầu thủ đá ≥900 phút mùa 2025/26 (`player_season_history`), bằng hai
+# cách cho cùng một câu trả lời:
+#
+#   * hồi quy log-log defcon/90 theo bàn-thua/90: độ dốc +0.177 (DEF, n=99),
+#     +0.145 (MID, n=129), +0.059 (FWD, n=25) — và R² chỉ 0.004–0.024;
+#   * so tứ phân vị: nhóm thủng lưới nhiều nhất nhận **×1.77** bàn thua so với
+#     nhóm ít nhất, nhưng chỉ làm **×1.04** hành động phòng ngự (DEF) và ×1.06
+#     (MID).
+#
+# Nói cách khác: đội yếu thủng lưới gần gấp đôi, nhưng hậu vệ của họ gần như không
+# tắc bóng/phá bóng nhiều hơn. Dùng số mũ 1.0 sẽ đẩy defcon lệch ±80% trong khi
+# thực tế chỉ ±4%, tức lấy một cột đang SAI VÌ BẤT ĐỘNG đổi thành một cột SAI VÌ
+# quá nhạy.
+#
+# Giới hạn của phép đo, khai ra: nó là so sánh GIỮA các cầu thủ ở các đội khác
+# nhau, không phải cùng một cầu thủ qua các đối thủ khác nhau — thứ thực sự cần.
+# Đo được điều đó cần dữ liệu từng trận, tức `player_gameweek_stats`, bảng vừa mới
+# bắt đầu tích. Xem lại sau vài chục vòng.
+DEFCON_ELASTICITY = 0.15
+
+
+def _defcon_fixture_adj(lam_conceded: float) -> float:
+    """Hành động phòng ngự phản ứng với sức ép — nhưng rất nhạt. Xem hằng số trên."""
+    ratio = max(lam_conceded, 0.05) / DEFCON_LAMBDA_REF
+    # Trần/sàn là lá chắn cho λ vô lý, KHÔNG phải một ràng buộc thường trực. Với số
+    # mũ 0.15, dải λ thực tế 0.4–2.5 cho ra 0.84–1.10, nên sàn 0.85 sẽ cắt cụt
+    # chính đầu dưới của quan hệ vừa đo được (Arsenal λ ≈ 0.44 rơi đúng vào đó).
+    return min(1.20, max(0.80, ratio ** DEFCON_ELASTICITY))
+
+
 def _poisson_at_least_one(lmbda: float) -> float:
     return 1.0 - math.exp(-max(lmbda, 0.0))
 
@@ -256,7 +293,11 @@ def expected_points(
         threshold = (
             rules.defcon_threshold_def if pos == 2 else rules.defcon_threshold_att
         )
-        exp_actions = dc90 * minutes_frac
+        # Trước đây `exp_actions` không nhìn đối thủ, nên một hậu vệ ra ĐÚNG cùng
+        # một xác suất defcon ở mọi vòng — gặp Man City hay gặp đội cuối bảng cũng
+        # vậy. Hệ số phải theo λ BÀN THUA (sức ép phải chống đỡ), không phải
+        # `fixture_adj` vốn xây trên λ bàn thắng của chính đội mình.
+        exp_actions = dc90 * minutes_frac * _defcon_fixture_adj(lam_conceded)
         p_hit = _poisson_ge_k(exp_actions, threshold)
         defcon_ev = rules.defcon_points * p_hit
 
