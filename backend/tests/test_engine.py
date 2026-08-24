@@ -813,3 +813,44 @@ def test_defcon_responds_to_the_opponent_but_only_as_much_as_measured():
     assert abs(_defcon_fixture_adj(1.3) - 1.0) < 1e-9
     assert 0.80 <= _defcon_fixture_adj(0.001) <= 1.20
     assert 0.80 <= _defcon_fixture_adj(99.0) <= 1.20
+
+
+def test_one_clean_sheet_does_not_make_a_defence_impenetrable():
+    """Tỷ lệ thực nghiệm phải làm mượt, nếu không mẫu bé thổi bay log-λ.
+
+    Hồi quy đo trên dữ liệu thật vòng 1 mùa 2026/27: 6/20 đội giữ sạch lưới nên
+    `emp_ga = 0`, rồi chốt `max(x, 1e-6)` biến số 0 đó thành log(1.42/1e-6) ≈ 14.2
+    và tiêm vào log-λ. Hậu quả: λ bàn thua của Arsenal rơi xuống sàn MIN_LAMBDA
+    (0.15) và clean sheet ra 86% GIỐNG HỆT NHAU cho mọi đối thủ — một cột dự báo
+    hoàn toàn không nhìn đối thủ nữa.
+
+    Trọng số `w_emp` không cứu được: nó chỉ nói tin bao nhiêu, không làm cho một
+    giá trị vô nghĩa trở nên có nghĩa.
+    """
+    from app.engine.team_strength import EMP_PRIOR_MATCHES, MIN_LAMBDA
+
+    class _TS:
+        _baseline = 1.42
+        from app.engine.team_strength import TeamStrength as _T
+        _smoothed = _T._smoothed
+
+    ts = _TS()
+    baseline = 1.42
+
+    # chưa đá trận nào -> đúng mức nền, y như nhánh cũ
+    assert abs(ts._smoothed(0, 0) - baseline) < 1e-9
+
+    # một trận sạch lưới -> thấp hơn nền, nhưng KHÔNG phải 0
+    one_cs = ts._smoothed(0, 1)
+    assert 0 < one_cs < baseline
+    assert one_cs == (EMP_PRIOR_MATCHES * baseline) / (1 + EMP_PRIOR_MATCHES)
+    # tỷ lệ phòng ngự suy ra phải nằm trong tầm nói được, không nổ
+    assert 1.0 < baseline / one_cs < 2.0
+
+    # và mẫu lớn thì phần làm mượt nhạt đi, dữ liệu thật thắng
+    many = ts._smoothed(0, 60)
+    assert many < one_cs
+    assert baseline / many > 10          # 60 trận sạch lưới thì được phép cực đoan
+
+    # sàn λ vẫn còn đó làm lá chắn, chỉ là không còn bị chạm vì lý do này
+    assert MIN_LAMBDA > 0

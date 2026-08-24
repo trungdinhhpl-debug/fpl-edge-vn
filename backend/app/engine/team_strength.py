@@ -69,6 +69,21 @@ AWAY_ADJ = 0.90
 DEFAULT_HOME_FACTOR = math.sqrt(HOME_ADV / AWAY_ADJ)   # ≈ 1.1155
 
 SHRINK_K = 6.0           # số trận để dữ liệu trong mùa lấn át prior
+
+# Số trận "ảo" ở mức nền giải, cộng vào TỬ và MẪU của các tỷ lệ thực nghiệm.
+#
+# Khác vai với `SHRINK_K`: hằng số kia trả lời "tin dữ liệu trong mùa bao nhiêu" và
+# nằm ở TRỌNG SỐ (`w_emp`); hằng số này chỉ để bản thân tỷ lệ CÓ NGHĨA ở mẫu bé.
+# Trọng số dù nhỏ đến đâu cũng không cứu được một giá trị vô nghĩa: sau vòng 1 mùa
+# 2026/27, **6/20 đội giữ sạch lưới** nên `emp_ga = 0`, và chốt `max(x, 1e-6)` ở
+# `_structural_log` biến số 0 đó thành `log(1.42 / 1e-6) ≈ 14.2` — một con số không
+# có nghĩa vật lý nào — rồi tiêm vào log-λ với trọng số 14%. Kết quả đo được:
+# λ Arsenal thủng lưới rơi xuống 0.15 (chạm sàn `MIN_LAMBDA`) và clean sheet ra
+# 86% GIỐNG HỆT NHAU cho mọi đối thủ, kể cả Chelsea.
+#
+# 3 chứ không phải 6: `w_emp` đã làm phần việc "tin bao nhiêu" rồi, lấy 6 ở cả hai
+# chỗ là co giãn hai lần cho cùng một lý do.
+EMP_PRIOR_MATCHES = 3.0
 MIN_LAMBDA = 0.15
 MAX_LAMBDA = 4.5
 
@@ -472,10 +487,12 @@ class TeamStrength:
             p_def = prior.defence if prior else 1.0
 
             mp = max(matches.get(t.id, 0), 0)
-            emp_xg = (team_xg.get(t.id, 0.0) / mp) if mp else self._baseline
-            emp_gf = (goals_for.get(t.id, 0) / mp) if mp else self._baseline
-            emp_ga = (goals_against.get(t.id, 0) / mp) if mp else self._baseline
-            emp_attack = 0.5 * emp_xg + 0.5 * emp_gf if mp else self._baseline
+            # Trung bình THÔ nổ ở mẫu bé — xem EMP_PRIOR_MATCHES. Làm mượt về mức
+            # nền giải; ở mp = 0 công thức trả đúng baseline như trước.
+            emp_xg = self._smoothed(team_xg.get(t.id, 0.0), mp)
+            emp_gf = self._smoothed(goals_for.get(t.id, 0), mp)
+            emp_ga = self._smoothed(goals_against.get(t.id, 0), mp)
+            emp_attack = 0.5 * emp_xg + 0.5 * emp_gf
 
             # Số hạng "manager" và "squad" của BƯỚC 2: chúng KHÔNG dịch λ trực
             # tiếp, mà rút ngắn thời gian dữ liệu trong mùa cần để lấn át prior.
@@ -530,6 +547,16 @@ class TeamStrength:
             )
             for t in teams
         }
+
+    def _smoothed(self, total: float, matches: int) -> float:
+        """Tỷ lệ mỗi trận, làm mượt về mức nền giải bằng `EMP_PRIOR_MATCHES` trận ảo.
+
+        `matches = 0` trả đúng `baseline`, y như nhánh cũ. Điểm khác nằm ở
+        `matches` nhỏ mà `total` bằng 0 — trước đây ra 0 và thổi bay log-λ.
+        """
+        return (total + EMP_PRIOR_MATCHES * self._baseline) / (
+            matches + EMP_PRIOR_MATCHES
+        )
 
     def _venue_split(self, teams: list) -> dict[int, tuple[float, float]]:
         """Lệch sân nhà/khách RIÊNG của từng đội, trung bình hình học = 1.
