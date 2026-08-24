@@ -220,6 +220,32 @@ def build_projections(
     # đổi sang luật đang áp trong xpoints (luật BPS 2026/27 đã đổi).
     stats_from_season = _stats_season(db)
 
+    # Nền lịch sử riêng từng cầu thủ (mùa trước), đã kéo về mức nền chung theo
+    # `prior_rel`. Rỗng khi `player_season_history` chưa được nạp — khi đó mọi thứ
+    # rơi về prior theo vị trí y như trước, nên đây là một nâng cấp cộng thêm chứ
+    # không phải một phụ thuộc cứng.
+    from app import scoring as _scoring
+    from app.services import player_priors as priors_mod
+    from app.engine.xmins import PRIOR_START_RATE
+    from app.engine.xpoints import PRIOR_XA90, PRIOR_XG90
+
+    _priors = priors_mod.load_priors(db, _scoring.SEASON)
+    prior_start: dict[int, float] = {}
+    prior_xg: dict[int, float] = {}
+    prior_xa: dict[int, float] = {}
+    for p in players:
+        pri = _priors.get(p.id)
+        if pri is None:
+            continue
+        rel = prior_rel.get(p.id, 1.0)
+        prior_start[p.id] = priors_mod.blended(pri.start_rate, PRIOR_START_RATE, rel)
+        prior_xg[p.id] = priors_mod.blended(
+            pri.xg90, PRIOR_XG90.get(p.element_type, 0.1), rel
+        )
+        prior_xa[p.id] = priors_mod.blended(
+            pri.xa90, PRIOR_XA90.get(p.element_type, 0.1), rel
+        )
+
     fx_by_gw = _fixtures_by_gw(fixtures)
     kickoff_of = {f.id: f.kickoff_time for f in fixtures}
     start_gw = get_planning_start_gw(db)
@@ -275,6 +301,7 @@ def build_projections(
             no_pl_history=team_id in no_history_teams,
             role_rank=role_rank.get(p.id),
             prior_reliability=prior_rel.get(p.id, 1.0),
+            prior_start_rate=prior_start.get(p.id),
         )
 
     # ---- chấm 11m: tỷ lệ đo ở cấp GIẢI, người đá đọc từ `penalties_order` ------
@@ -327,6 +354,8 @@ def build_projections(
             lam_conceded=lam_against,
             team_avg_gf=ts.season_avg_gf(team_id),
             n_fixtures=1,
+            prior_xg90=prior_xg.get(p.id),
+            prior_xa90=prior_xa.get(p.id),
         )
 
     def _allocate_gw_bonus(gw_fx: dict) -> dict[tuple[int, int], float]:

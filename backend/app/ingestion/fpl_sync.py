@@ -22,6 +22,7 @@ from app.models import (
     Player,
     PlayerGameweekStat,
     PlayerPrice,
+    PlayerSeasonHistory,
     Season,
     SeasonRules,
     SourceFetchLog,
@@ -295,6 +296,95 @@ def sync_fixtures(db: Session, client: FPLClient) -> dict:
     # mark blank/double gameweeks by counting fixtures per team per event
     _annotate_gameweeks(db)
     return {"fixtures": n}
+
+
+# ------------------------------------------------ nền lịch sử các mùa trước ----
+# Số cầu thủ hỏi trong MỘT lần chạy. Toàn bộ 609 người mất ~73 giây với
+# `fpl_request_delay_ms=120`, vẫn nằm gọn trong hạn 20 phút của GitHub Actions —
+# nhưng chia nhỏ thì lần chạy đầu tiên không biến thành một lần chạy dị thường,
+# và một sự cố mạng giữa chừng chỉ mất phần dở chứ không mất cả mẻ.
+HISTORY_BATCH = 250
+
+
+def sync_player_history_past(db: Session, client: FPLClient,
+                             batch: int = HISTORY_BATCH) -> dict:
+    """Tổng cả-mùa của các MÙA ĐÃ QUA, từ `element-summary.history_past`.
+
+    Đây là nền lịch sử mà engine mất khi FPL reset thống kê tại hạn vòng 1. Không
+    có nó, `xmins` phải co mọi người về `PRIOR_START_RATE = 0.45` — một hằng số
+    dùng chung cho Haaland lẫn thủ môn số ba — và `xpoints` co xG/90 về prior theo
+    VỊ TRÍ. Đo được ở vòng 1 mùa 2026/27: Haaland, Isak, Szoboszlai và hàng loạt
+    hậu vệ cùng ra 65–66 phút, tức mô hình đang nói "tôi không phân biệt được".
+
+    Chỉ hỏi cầu thủ CHƯA hỏi bao giờ (`Player.history_fetched_at`). Mùa đã khép
+    lại thì số không đổi nữa, nên đây là việc chạy một lần chứ không phải mỗi 6
+    tiếng; cầu thủ mới xuất hiện giữa mùa sẽ được nhặt ở lần đồng bộ kế tiếp.
+    """
+    pending = db.scalars(
+        select(Player).where(Player.history_fetched_at.is_(None)).limit(batch)
+    ).all()
+    if not pending:
+        return {"fetched": 0, "rows": 0, "remaining": 0}
+
+    existing = {
+        (r.player_id, r.season_name): r
+        for r in db.scalars(select(PlayerSeasonHistory)).all()
+    }
+    now = datetime.now(timezone.utc)
+    written = 0
+    summaries = client.element_summaries([p.id for p in pending])
+    for player in pending:
+        summary = summaries.get(player.id)
+        if summary is None:
+            continue        # lỗi mạng: để nguyên None, lần sau hỏi lại
+        for row in summary.get("history_past", []):
+            season = row.get("season_name")
+            if not season:
+                continue
+            fields = dict(
+                minutes=_i(row.get("minutes")), starts=_i(row.get("starts")),
+                total_points=_i(row.get("total_points")),
+                goals_scored=_i(row.get("goals_scored")),
+                assists=_i(row.get("assists")),
+                clean_sheets=_i(row.get("clean_sheets")),
+                goals_conceded=_i(row.get("goals_conceded")),
+                saves=_i(row.get("saves")),
+                yellow_cards=_i(row.get("yellow_cards")),
+                red_cards=_i(row.get("red_cards")),
+                bonus=_i(row.get("bonus")), bps=_i(row.get("bps")),
+                expected_goals=_f(row.get("expected_goals")),
+                expected_assists=_f(row.get("expected_assists")),
+                defensive_contribution=_f(row.get("defensive_contribution")),
+                clearances_blocks_interceptions=_f(
+                    row.get("clearances_blocks_interceptions")
+                ),
+            )
+            found = existing.get((player.id, season))
+            if found is None:
+                found = PlayerSeasonHistory(
+                    player_id=player.id, season_name=season, **fields
+                )
+                db.add(found)
+                existing[(player.id, season)] = found
+                written += 1
+            else:
+                for k, v in fields.items():
+                    setattr(found, k, v)
+        # Đánh dấu kể cả khi KHÔNG có mùa nào: tân binh chưa từng đá Ngoại hạng là
+        # câu trả lời hợp lệ, không phải một lần hỏi hỏng cần thử lại mãi.
+        player.history_fetched_at = now
+
+    # `SessionLocal` dựng với `autoflush=False`, nên nếu không đẩy tay thì phép đếm
+    # dưới đây chạy trên trạng thái TRƯỚC lô vừa xử lý và báo thừa đúng một lô.
+    db.flush()
+    remaining = db.scalar(
+        select(func.count()).select_from(Player)
+        .where(Player.history_fetched_at.is_(None))
+    ) or 0
+    _log(db, "FPL element history", f"{settings.fpl_base_url}/element-summary/", "ok",
+         written, f"{len(pending)} cầu thủ, còn lại {remaining}")
+    db.commit()
+    return {"fetched": len(pending), "rows": written, "remaining": remaining}
 
 
 # ------------------------------------------- thống kê thật theo từng trận ----
@@ -793,6 +883,7 @@ def run_full_sync(db: Session, build_proj: bool = True,
         # có phút thi đấu từng vòng và xG từng trận.
         if detail:
             result["player_stats"] = sync_player_gameweek_stats(db, client)
+            result["player_history"] = sync_player_history_past(db, client)
     result["experts"] = seed_experts(db)
     result["expert_signals"] = sync_expert_signals(db)
     # Đóng vòng lặp đo lường: dự báo đã phát ra phải được chấm bằng kết quả thật,

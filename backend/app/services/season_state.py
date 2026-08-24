@@ -228,6 +228,10 @@ def season_state(db: Session) -> dict:
         "max_team_matches": max_team_matches,
         "matches_until_established": max(0, EARLY_SEASON_MATCHES - max_team_matches),
         "prior_based_share_pct": prior_share,
+        # Nền lịch sử mất 3 lần đồng bộ mới nạp xong (250 cầu thủ mỗi lượt), nên
+        # phải nhìn được từ ngoài là đã xong chưa — không thì "prior riêng đã bật"
+        # là một điều chỉ đúng với một phần cầu thủ mà không ai biết là phần nào.
+        "history_coverage": _history_coverage(db),
         "prior_based_count": prior_based,
         "projection_count": total_est,
         "downweighting": {
@@ -244,6 +248,13 @@ def season_state(db: Session) -> dict:
         },
         "note": _phase_note(phase, finished, prior_share),
     }
+
+
+def _history_coverage(db: Session) -> dict:
+    from app import scoring
+    from app.services.player_priors import coverage
+
+    return coverage(db, scoring.SEASON)
 
 
 def _phase_note(phase: str, finished: int, prior_share: float | None) -> str:

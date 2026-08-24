@@ -126,6 +126,9 @@ def estimate_minutes(
     no_pl_history: bool = False,
     role_rank: int | None = None,
     prior_reliability: float = 1.0,
+    # Tỷ lệ đá chính nền cho RIÊNG cầu thủ này (từ mùa trước, đã kéo về mức nền
+    # theo độ liên quan). None = không có nền lịch sử -> dùng hằng số toàn giải.
+    prior_start_rate: float | None = None,
 ) -> MinutesEstimate:
     avail_mult, avail_reason = _availability_multiplier(status, chance_of_playing)
 
@@ -150,8 +153,14 @@ def estimate_minutes(
     # a new signing drops from ~0.77 to ~0.66.
     rel = max(0.1, min(1.0, prior_reliability))
     prior_games = PRIOR_GAMES + games_ref * (1.0 - rel)
+    # `PRIOR_START_RATE` là một hằng số cho TOÀN GIẢI. Giữa mùa nó vô hại vì dữ
+    # liệu mùa này đã đè lên; ở vòng đầu thì prior CHÍNH LÀ câu trả lời, nên
+    # Haaland và thủ môn số ba cùng xuất phát từ 0.45 và cùng về 65 phút. Nền
+    # riêng của từng người lấy từ `player_season_history` — xem
+    # `services/player_priors.py`.
+    base_start = PRIOR_START_RATE if prior_start_rate is None else prior_start_rate
     start_rate = min(
-        (season_starts + prior_games * PRIOR_START_RATE) / (games_ref + prior_games), 1.0
+        (season_starts + prior_games * base_start) / (games_ref + prior_games), 1.0
     )
     appearances = 0
     if recent_minutes:
@@ -174,8 +183,16 @@ def estimate_minutes(
     # một cầu thủ ngồi ngoài có `[0, 0]` chứ không còn rỗng, và nhánh này tắt mất
     # đúng nhóm nó được viết ra để phục vụ. Hai cách viết tương đương với nhóm
     # `season_minutes == 0`: tổng mùa bằng 0 thì mọi dòng từng vòng cũng bằng 0.
+    # Thêm `prior_start_rate is None`: nhánh này là phương án CUỐI cho người ta
+    # không biết gì về họ, và xếp hạng theo GIÁ là bằng chứng yếu nhất trong nhà.
+    # Từ khi có `player_season_history`, một người 0 phút mùa này vẫn có thể có
+    # 2217 phút mùa trước (Gyökeres) — dùng giá thay cho con số đó là vứt bằng
+    # chứng tốt để giữ bằng chứng tồi.
     role_based = (
-        role_rank is not None and season_minutes == 0 and not any(recent_minutes or [])
+        role_rank is not None
+        and season_minutes == 0
+        and not any(recent_minutes or [])
+        and prior_start_rate is None
     )
     if role_based:
         slots = TYPICAL_STARTERS.get(element_type, 4)

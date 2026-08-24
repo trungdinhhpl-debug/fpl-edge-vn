@@ -158,6 +158,14 @@ class Player(Base):
     # `app/engine/penalties.py`. Nullable để `db.ensure_columns()` thêm được vào
     # bảng đang chạy.
     penalties_missed: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Đã hỏi `element-summary` cho cầu thủ này chưa. Cần một dấu RIÊNG, không suy
+    # từ "có dòng trong player_season_history hay không": tân binh chưa từng đá
+    # Ngoại hạng thì không có dòng nào, và nếu lấy sự vắng mặt làm dấu thì mỗi lần
+    # đồng bộ lại đi hỏi lại toàn bộ nhóm đó mãi mãi. Nullable để
+    # `db.ensure_columns()` thêm được vào bảng đang chạy.
+    history_fetched_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     corners_and_indirect_freekicks_order: Mapped[int | None] = mapped_column(Integer, nullable=True)
     direct_freekicks_order: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
@@ -218,6 +226,45 @@ class Fixture(Base):
     started: Mapped[bool] = mapped_column(Boolean, default=False)
 
     __table_args__ = (UniqueConstraint("id", name="uq_fixture_id"),)
+
+
+class PlayerSeasonHistory(Base):
+    """Tổng cả-mùa của những MÙA ĐÃ QUA, từ `element-summary.history_past`.
+
+    FPL xoá sạch thống kê cả-mùa ngay tại hạn vòng 1 (đo 2026-08-21), nên bảng
+    `players` chỉ còn số của mùa đang chơi. Không có bảng này thì engine mất toàn
+    bộ nền lịch sử đúng vào lúc nó cần nhất — những vòng đầu mùa — và buộc phải co
+    mọi cầu thủ về một prior chung THEO VỊ TRÍ. Hậu quả đo được ở vòng 1 mùa
+    2026/27: Haaland, Isak, Szoboszlai và hàng loạt hậu vệ cùng ra 65–66 phút.
+
+    `history_past` không đổi sau khi mùa đã khép lại, nên bảng này chỉ phải nạp
+    MỘT lần cho mỗi cầu thủ (xem `Player.history_fetched_at`), không phải mỗi lần
+    đồng bộ.
+    """
+    __tablename__ = "player_season_history"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    player_id: Mapped[int] = mapped_column(ForeignKey("players.id"), index=True)
+    season_name: Mapped[str] = mapped_column(String(16), index=True)  # "2025/26"
+    minutes: Mapped[int] = mapped_column(Integer, default=0)
+    starts: Mapped[int] = mapped_column(Integer, default=0)
+    total_points: Mapped[int] = mapped_column(Integer, default=0)
+    goals_scored: Mapped[int] = mapped_column(Integer, default=0)
+    assists: Mapped[int] = mapped_column(Integer, default=0)
+    clean_sheets: Mapped[int] = mapped_column(Integer, default=0)
+    goals_conceded: Mapped[int] = mapped_column(Integer, default=0)
+    saves: Mapped[int] = mapped_column(Integer, default=0)
+    yellow_cards: Mapped[int] = mapped_column(Integer, default=0)
+    red_cards: Mapped[int] = mapped_column(Integer, default=0)
+    bonus: Mapped[int] = mapped_column(Integer, default=0)
+    bps: Mapped[int] = mapped_column(Integer, default=0)
+    expected_goals: Mapped[float] = mapped_column(Float, default=0.0)
+    expected_assists: Mapped[float] = mapped_column(Float, default=0.0)
+    defensive_contribution: Mapped[float] = mapped_column(Float, default=0.0)
+    clearances_blocks_interceptions: Mapped[float] = mapped_column(Float, default=0.0)
+
+    __table_args__ = (
+        UniqueConstraint("player_id", "season_name", name="uq_player_season"),
+    )
 
 
 class PlayerGameweekStat(Base):

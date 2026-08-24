@@ -25,6 +25,10 @@ def cmd_sync(detail: bool) -> None:
     print(f"  fixtures:    {result['fixtures']['fixtures']}")
     print(f"  projections: {result['projections']['projections_written']} "
           f"across GW {result['projections']['gameweeks']}")
+    if "player_history" in result:
+        ph = result["player_history"]
+        print(f"  nền lịch sử: {ph.get('rows', 0)} dòng mùa cũ "
+              f"({ph.get('fetched', 0)} cầu thủ, còn {ph.get('remaining', 0)})")
     if "player_stats" in result:
         ps = result["player_stats"]
         print(f"  match stats: {ps.get('rows', 0)} dòng mới "

@@ -142,14 +142,32 @@ def expected_points(
     lam_conceded: float,
     team_avg_gf: float,
     n_fixtures: int = 1,
+    # Nền xG/xA per-90 của RIÊNG cầu thủ này, lấy từ mùa trước và đã kéo về prior
+    # theo vị trí theo độ liên quan. None = không có nền lịch sử -> prior vị trí.
+    prior_xg90: float | None = None,
+    prior_xa90: float | None = None,
 ) -> XPBreakdown:
     pos = element_type
     rules = RULES
     mins90 = max(minutes_season, 1) / 90.0
 
     # per-90 underlying, shrunk toward prior
-    xg90 = _shrink(xg_season / mins90, PRIOR_XG90.get(pos, 0.1), minutes_season)
-    xa90 = _shrink(xa_season / mins90, PRIOR_XA90.get(pos, 0.1), minutes_season)
+    #
+    # Prior kéo về là nền của CHÍNH cầu thủ ở mùa trước khi có; thiếu thì mới rơi
+    # về prior theo vị trí. Khác biệt chỉ lộ ra ở đầu mùa — đúng lúc `mins90` còn
+    # bé nên trọng số nghiêng hẳn về prior — nhưng đúng lúc đó nó quyết định tất
+    # cả: một tiền đạo 0.7 xG/90 và một tiền đạo 0.15 xG/90 không được phép cùng
+    # xuất phát từ 0.35.
+    xg90 = _shrink(
+        xg_season / mins90,
+        PRIOR_XG90.get(pos, 0.1) if prior_xg90 is None else prior_xg90,
+        minutes_season,
+    )
+    xa90 = _shrink(
+        xa_season / mins90,
+        PRIOR_XA90.get(pos, 0.1) if prior_xa90 is None else prior_xa90,
+        minutes_season,
+    )
     dc90 = _shrink(dc_season / mins90, PRIOR_DC90.get(pos, 4.0), minutes_season)
     # Bốn tỷ lệ này cũng phải co giãn theo cỡ mẫu như ba tỷ lệ trên. Không co giãn
     # thì `tổng_mùa / (phút/90)` nổ ở mẫu bé — xem chú thích ở PRIOR_BPS90.

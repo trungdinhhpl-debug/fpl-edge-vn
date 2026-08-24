@@ -1,9 +1,10 @@
 """Ingestion tests — focus on idempotency (jobs re-run on a schedule)."""
 from contextlib import contextmanager
+from datetime import datetime, timezone
 
 from sqlalchemy import func, select
 
-from app.models import Fixture, MarketOdds, Team
+from app.models import Fixture, MarketOdds, SourceFetchLog, Team
 
 
 def _stub_provider(monkeypatch, db, lam=(2.0, 1.0)):
@@ -235,3 +236,68 @@ def test_match_stats_sync_is_idempotent(db):
         client = _FakeLive([(pid, played_fx.id, 90)])
         assert sync_player_gameweek_stats(db, client)["gameweeks"] == 0
         assert client.calls == 0
+
+
+def test_history_sync_asks_each_player_once(db):
+    """Nền lịch sử là việc chạy MỘT lần, không phải mỗi 6 tiếng.
+
+    Mùa đã khép lại thì `history_past` không đổi nữa. Nếu đường này không nhớ đã
+    hỏi ai, nó sẽ ngốn ~609 lệnh element-summary mỗi lần đồng bộ, bốn lần một
+    ngày — đúng cái chi phí mà việc chuyển sang `/event/{gw}/live/` đã tránh được.
+
+    Và dấu "đã hỏi" phải TÁCH khỏi "có dòng lịch sử": tân binh chưa từng đá Ngoại
+    hạng trả về rỗng, đó là câu trả lời hợp lệ chứ không phải một lần hỏi hỏng.
+    """
+    from app.ingestion.fpl_sync import sync_player_history_past
+    from app.models import Player, PlayerSeasonHistory
+
+    class _FakeSummaries:
+        def __init__(self, payload):
+            self.payload = payload
+            self.asked: list[list[int]] = []
+
+        def element_summaries(self, ids):
+            self.asked.append(list(ids))
+            return {pid: self.payload.get(pid, {"history_past": []}) for pid in ids}
+
+    players = db.scalars(select(Player).limit(2)).all()
+    veteran, rookie = players[0].id, players[1].id
+    saved = [(p.id, p.history_fetched_at) for p in db.scalars(select(Player)).all()]
+    try:
+        # Chỉ để đúng hai người ở trạng thái "chưa hỏi": DB demo có hàng trăm cầu
+        # thủ, nên nếu để tất cả là None thì lô thứ hai sẽ nhặt hai người KHÁC và
+        # phép thử đo nhầm thứ nó định đo.
+        marker = datetime(2026, 8, 1, tzinfo=timezone.utc)
+        for p in db.scalars(select(Player)).all():
+            p.history_fetched_at = marker
+        for pid in (veteran, rookie):
+            db.get(Player, pid).history_fetched_at = None
+        db.query(PlayerSeasonHistory).delete()
+        db.flush()
+
+        client = _FakeSummaries({veteran: {"history_past": [
+            {"season_name": "2025/26", "minutes": 3000, "starts": 34,
+             "expected_goals": "18.5", "expected_assists": "6.0"},
+        ]}})
+        first = sync_player_history_past(db, client, batch=2)
+        assert first["fetched"] == 2 and first["rows"] == 1
+
+        # lần hai: cả hai đã được đánh dấu, kể cả người KHÔNG có mùa nào
+        second = sync_player_history_past(db, client, batch=2)
+        assert second["fetched"] == 0
+        assert len(client.asked) == 1          # không hỏi lại lần nữa
+
+        rows = db.scalars(select(PlayerSeasonHistory)).all()
+        assert [r.player_id for r in rows] == [veteran]
+        assert rows[0].minutes == 3000 and rows[0].starts == 34
+        assert db.get(Player, rookie).history_fetched_at is not None
+    finally:
+        db.rollback()
+        db.query(PlayerSeasonHistory).delete()
+        by_id = {p.id: p for p in db.scalars(select(Player)).all()}
+        for pid, when in saved:
+            by_id[pid].history_fetched_at = when
+        db.query(SourceFetchLog).filter(
+            SourceFetchLog.source_name == "FPL element history"
+        ).delete()
+        db.commit()
