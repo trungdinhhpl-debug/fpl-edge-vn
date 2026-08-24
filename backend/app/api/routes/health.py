@@ -257,8 +257,15 @@ def sources_health(db: Session = Depends(get_db)) -> dict:
 
 
 @router.post("/admin/refresh")
-def admin_refresh(background: BackgroundTasks, detail: bool = False) -> dict:
-    """Trigger a full data + projection rebuild in the background."""
+def admin_refresh(background: BackgroundTasks, detail: bool | None = None) -> dict:
+    """Trigger a full data + projection rebuild in the background.
+
+    `detail=None` (không truyền) = theo `SYNC_PLAYERS_DETAIL`. Trước đây tham số
+    này mặc định `False` cứng, nên gọi tay endpoint này sẽ BỎ QUA việc đổ
+    `player_gameweek_stats` dù cấu hình đã bật — cùng cái bẫy đã gặp ở `cli.py`:
+    một giá trị mặc định trông vô hại nhưng vô hiệu hoá biến môi trường ngay tại
+    chỗ người ta dùng để chữa cháy.
+    """
     def _job() -> None:
         from app.ingestion.fpl_sync import run_full_sync
         with session_scope() as db:
