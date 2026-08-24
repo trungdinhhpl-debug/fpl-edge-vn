@@ -18,6 +18,7 @@ def _news_context(db: Session) -> dict:
     """Inputs the minutes model needs, gathered once for the whole feed."""
     from app.models import Fixture, PlayerGameweekStat
     from app.services.common import planning_start_gw
+    from app.services.season_state import played_condition
 
     recent: dict[int, list[int]] = defaultdict(list)
     for s in db.scalars(
@@ -26,7 +27,7 @@ def _news_context(db: Session) -> dict:
         recent[s.player_id].append(s.minutes)
 
     played: dict[int, int] = defaultdict(int)
-    for f in db.scalars(select(Fixture).where(Fixture.finished.is_(True))).all():
+    for f in db.scalars(select(Fixture).where(played_condition())).all():
         played[f.team_h] += 1
         played[f.team_a] += 1
 

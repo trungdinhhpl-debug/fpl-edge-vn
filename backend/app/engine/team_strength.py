@@ -231,9 +231,10 @@ def load_match_xg(db) -> list[Observation]:
     from sqlalchemy import select
 
     from app.models import Fixture, PlayerGameweekStat
+    from app.services.season_state import played_condition
 
     fixtures = {
-        f.id: f for f in db.scalars(select(Fixture).where(Fixture.finished.is_(True))).all()
+        f.id: f for f in db.scalars(select(Fixture).where(played_condition())).all()
     }
     if not fixtures:
         return []

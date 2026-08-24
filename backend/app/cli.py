@@ -17,12 +17,18 @@ def cmd_sync(detail: bool) -> None:
     from app.ingestion.fpl_sync import run_full_sync
     init_db()
     with session_scope() as db:
-        result = run_full_sync(db, build_proj=True, detail=detail)
+        # None (không có --detail) = để SYNC_PLAYERS_DETAIL quyết định; truyền
+        # thẳng False sẽ vô hiệu hoá biến môi trường ngay tại chỗ chạy thật.
+        result = run_full_sync(db, build_proj=True, detail=True if detail else None)
     print("Sync complete.")
     print(f"  players:     {result['bootstrap']['players']}")
     print(f"  fixtures:    {result['fixtures']['fixtures']}")
     print(f"  projections: {result['projections']['projections_written']} "
           f"across GW {result['projections']['gameweeks']}")
+    if "player_stats" in result:
+        ps = result["player_stats"]
+        print(f"  match stats: {ps.get('rows', 0)} dòng mới "
+              f"({ps.get('gameweeks', 0)} vòng gọi lại)")
 
 
 def cmd_project() -> None:

@@ -724,3 +724,25 @@ def test_preseason_confidence_cannot_be_labelled_high():
 
     # bỏ trống tham số = hành vi cũ, chỗ gọi lẻ không gãy
     assert confidence_from("High", 2750, False) >= HIGH
+
+
+def test_a_single_recent_game_is_not_worth_five():
+    """Trọng số của phong độ gần đây phải theo cỡ mẫu, không phải hằng số.
+
+    Hồi quy: trọng số cố định 0.6 cho một trận duy nhất kéo p_start của Gyökeres
+    từ 0.62 xuống 0.248 (xMins 54 -> 22) chỉ vì anh ta ngồi ngoài vòng mở màn.
+    Lỗi này ngủ yên cho tới khi `player_gameweek_stats` được đổ dữ liệu — trước
+    đó danh sách luôn rỗng nên nhánh này chưa từng chạy thật.
+    """
+    from app.engine.xmins import estimate_minutes
+
+    base = dict(element_type=3, status="a", chance_of_playing=None,
+                season_starts=10, season_minutes=900, team_matches_played=10)
+    none = estimate_minutes(**base)
+    one = estimate_minutes(**base, recent_minutes=[0])
+    five = estimate_minutes(**base, recent_minutes=[0, 0, 0, 0, 0])
+
+    # nhiều bằng chứng "không đá" -> ước lượng càng thấp
+    assert none.p_start > one.p_start > five.p_start
+    # nhưng một trận không được mang quá nửa sức nặng của năm trận
+    assert (none.p_start - one.p_start) < 0.5 * (none.p_start - five.p_start)

@@ -208,6 +208,13 @@ class Fixture(Base):
     team_h_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
     team_a_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
     finished: Mapped[bool] = mapped_column(Boolean, default=False)
+    # FPL chỉ bật `finished` khi CẢ VÒNG được data-check, nên một trận đã đá xong
+    # và đã chốt điểm thưởng vẫn còn `finished=false` trong nhiều ngày (đo
+    # 2026-08-22: Arsenal 3-0 tối 21/08, bonus 3/2/1 đã chốt, `finished=false`,
+    # `finished_provisional=true`). Nullable để `db.ensure_columns()` thêm được
+    # vào bảng đang chạy; NULL ở hàng cũ nghĩa là "chưa đồng bộ trường này",
+    # không phải "chưa đá" — nên phía đọc phải OR với `finished`.
+    finished_provisional: Mapped[bool | None] = mapped_column(Boolean, nullable=True, default=None)
     started: Mapped[bool] = mapped_column(Boolean, default=False)
 
     __table_args__ = (UniqueConstraint("id", name="uq_fixture_id"),)

@@ -26,6 +26,11 @@ PRIOR_GAMES = 2.0
 PRIOR_START_RATE = 0.45
 PRIOR_APPEAR_RATE = 0.60
 
+# Số trận "ảo" khi cân tín hiệu trận gần đây với tỷ lệ cả mùa. Trọng số của phần
+# gần đây là n/(n+k) chứ không phải một hằng số: với cửa sổ đầy (n=5) nó ra 0.625,
+# tức gần đúng con số 0.6 vẫn dùng trước đây, nhưng với n=1 nó chỉ còn 0.25.
+RECENT_SMOOTHING = 3.0
+
 # Players at newly-promoted clubs have ZERO Premier League minutes, so the
 # minutes-based rate above would rate every one of them at ~2% to start — i.e.
 # the model would claim the club fields nobody. For those squads we fall back to
@@ -162,7 +167,16 @@ def estimate_minutes(
     # Không có phút Ngoại hạng nào (đội mới lên hạng, hoặc tân binh từ giải khác)
     # -> ước lượng theo vai trò dự kiến, xếp hạng bằng giá FPL trong từng vị trí,
     # thay vì tính tỷ lệ từ mẫu rỗng (vốn ra ~2% cho tất cả).
-    role_based = role_rank is not None and season_minutes == 0 and not recent_minutes
+    #
+    # `not any(...)` chứ không phải `not recent_minutes`: điều kiện muốn nói là
+    # "chưa quan sát được phút nào", nhưng bản cũ đo bằng "danh sách rỗng" — đúng
+    # chỉ vì `player_gameweek_stats` chưa từng có dữ liệu. Khi bảng đó được đổ,
+    # một cầu thủ ngồi ngoài có `[0, 0]` chứ không còn rỗng, và nhánh này tắt mất
+    # đúng nhóm nó được viết ra để phục vụ. Hai cách viết tương đương với nhóm
+    # `season_minutes == 0`: tổng mùa bằng 0 thì mọi dòng từng vòng cũng bằng 0.
+    role_based = (
+        role_rank is not None and season_minutes == 0 and not any(recent_minutes or [])
+    )
     if role_based:
         slots = TYPICAL_STARTERS.get(element_type, 4)
         tier = 0 if role_rank < slots else (1 if role_rank == slots else 2)
@@ -172,12 +186,21 @@ def estimate_minutes(
         appear_rate = min(0.95, start_rate + bonus[tier])
 
     # recent-form start signal (weight recent games higher)
+    #
+    # Trọng số theo CỠ MẪU, không phải 0.6 cố định. Với hằng số cũ, một trận duy
+    # nhất mang 60% quyết định: đo trên dữ liệu thật vòng 1 mùa 2026/27, Gyökeres
+    # ngồi ngoài đúng một trận rơi p_start 0.62 -> 0.248 (xMins 54 -> 22), còn
+    # người đá trọn 90 phút một trận thì bật lên 74 phút. Trước đây lỗi này không
+    # lộ ra chỉ vì `player_gameweek_stats` chưa bao giờ có dữ liệu, nên nhánh này
+    # chưa từng chạy thật. Cùng tinh thần làm mượt Laplace đã dùng ở
+    # `_completion_rate`: một trận là một trận, không phải một kết luận.
     if recent_minutes:
         last = recent_minutes[-5:]
         recent_start = sum(1 for m in last if m >= 60) / len(last)
         recent_appear = sum(1 for m in last if m > 0) / len(last)
-        start_signal = 0.6 * recent_start + 0.4 * start_rate
-        appear_signal = 0.6 * recent_appear + 0.4 * appear_rate
+        w = len(last) / (len(last) + RECENT_SMOOTHING)
+        start_signal = w * recent_start + (1.0 - w) * start_rate
+        appear_signal = w * recent_appear + (1.0 - w) * appear_rate
         sample_note = f"{len(last)} recent games"
     else:
         start_signal = start_rate
@@ -224,7 +247,11 @@ def estimate_minutes(
     if avail_reason:
         reason = f"Availability: {avail_reason}"
     elif role_based:
-        reason = "Đội mới lên hạng — ước lượng theo vai trò/giá, chưa có dữ liệu Ngoại hạng"
+        # Bỏ mệnh đề "Đội mới lên hạng": nhánh này chạy cho MỌI người chưa có phút
+        # Ngoại hạng mùa này, nên nó dán nhãn thăng hạng lên cả cầu thủ của các câu
+        # lạc bộ lâu đời (Gyökeres, Arsenal). Giữ lại phần đúng — cách ước lượng —
+        # và không nói gì về câu lạc bộ.
+        reason = "Ước lượng theo vai trò/giá, chưa có phút Ngoại hạng mùa này"
     elif n_fixtures_this_gw > 1:
         reason = f"Double gameweek ({n_fixtures_this_gw} fixtures); {sample_note}"
     elif p_start >= 0.9:

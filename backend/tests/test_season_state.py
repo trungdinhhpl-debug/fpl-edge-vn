@@ -173,10 +173,11 @@ def test_stats_season_is_last_season_until_a_match_finishes(db):
 
     # không sửa dữ liệu chung: truyền tên mùa vào thẳng
     fixtures = db.scalars(select(Fixture)).all()
-    original = [(f.id, f.finished) for f in fixtures]
+    original = [(f.id, f.finished, f.finished_provisional) for f in fixtures]
     try:
         for f in fixtures:
             f.finished = False
+            f.finished_provisional = False
         db.flush()
         assert stats_season(db, "2026/27") == "2025/26"
 
@@ -186,7 +187,119 @@ def test_stats_season_is_last_season_until_a_match_finishes(db):
             assert stats_season(db, "2026/27") == "2026/27"
     finally:
         by_id = {f.id: f for f in fixtures}
-        for fid, was in original:
+        for fid, was, was_prov in original:
             by_id[fid].finished = was
+            by_id[fid].finished_provisional = was_prov
+        db.flush()
+        db.rollback()
+
+
+def test_a_played_match_counts_before_fpl_data_checks_the_gameweek(db):
+    """Trận đã đá xong nhưng FPL chưa data-check vẫn phải được tính.
+
+    Hồi quy 2026-08-22 (vòng 1 mùa 2026/27): trận Arsenal 3-0 tối 21/08 có
+    `minutes=90`, tỷ số cuối và bonus 3/2/1 đã chốt, nhưng FPL vẫn để
+    `finished=false` / `finished_provisional=true` cho tới khi cả vòng được
+    data-check — ba ngày sau. Trong ba ngày đó trang dán nhãn PRE-SEASON cho một
+    mùa đang đá, và `stats_season()` quy đổi BPS thêm một lần thừa vì FPL đã
+    reset thống kê ngay tại hạn vòng 1.
+    """
+    from sqlalchemy import select
+
+    from app.models import Fixture
+    from app.services.season_state import season_state, stats_season
+
+    fixtures = db.scalars(select(Fixture)).all()
+    assert fixtures, "demo DB phải có fixture thì phép thử này mới nói lên điều gì"
+    original = [(f.id, f.finished, f.finished_provisional) for f in fixtures]
+    try:
+        for f in fixtures:
+            f.finished = False
+            f.finished_provisional = False
+        db.flush()
+        assert season_state(db)["phase"] == "preseason"
+        assert stats_season(db, "2026/27") == "2025/26"
+
+        # chỉ bật cờ tạm — cờ `finished` vẫn false, đúng như FPL đang trả về
+        fixtures[0].finished_provisional = True
+        db.flush()
+        assert fixtures[0].finished is False
+        assert season_state(db)["matches_played"] == 1
+        assert season_state(db)["phase"] == "early"
+        assert stats_season(db, "2026/27") == "2026/27"
+    finally:
+        by_id = {f.id: f for f in fixtures}
+        for fid, was, was_prov in original:
+            by_id[fid].finished = was
+            by_id[fid].finished_provisional = was_prov
+        db.flush()
+        db.rollback()
+
+
+def test_null_provisional_on_old_rows_does_not_erase_a_finished_match(db):
+    """NULL = "chưa đồng bộ trường này", không phải "chưa đá".
+
+    Cột `finished_provisional` được thêm vào một cơ sở dữ liệu đang chạy, nên mọi
+    hàng ghi trước đó mang NULL. Nếu phía đọc chỉ nhìn cột mới thì toàn bộ lịch sử
+    trận đấu biến mất trong đúng một lần deploy.
+    """
+    from sqlalchemy import select
+
+    from app.models import Fixture
+    from app.services.season_state import season_state
+
+    fixtures = db.scalars(select(Fixture)).all()
+    original = [(f.id, f.finished, f.finished_provisional) for f in fixtures]
+    try:
+        for f in fixtures:
+            f.finished = False
+            f.finished_provisional = None
+        fixtures[0].finished = True
+        db.flush()
+        assert season_state(db)["matches_played"] == 1
+    finally:
+        by_id = {f.id: f for f in fixtures}
+        for fid, was, was_prov in original:
+            by_id[fid].finished = was
+            by_id[fid].finished_provisional = was_prov
+        db.flush()
+        db.rollback()
+
+
+def test_not_played_condition_keeps_null_rows(db):
+    """`~played_condition()` không dùng được: NOT (false OR NULL) ra NULL.
+
+    Nếu viết phủ định bằng toán tử `~`, mọi trận CHƯA đá thuộc hàng cũ (nơi
+    `finished_provisional` còn NULL) sẽ rơi khỏi truy vấn mà không báo lỗi — và
+    `sync_odds` sẽ lặng lẽ không tìm được trận nào để gắn kèo nhà cái.
+    """
+    from sqlalchemy import func, select
+
+    from app.models import Fixture
+    from app.services.season_state import not_played_condition, played_condition
+
+    fixtures = db.scalars(select(Fixture)).all()
+    original = [(f.id, f.finished, f.finished_provisional) for f in fixtures]
+    try:
+        for f in fixtures:
+            f.finished = False
+            f.finished_provisional = None      # hàng ghi trước khi có cột này
+        fixtures[0].finished_provisional = True
+        db.flush()
+
+        played = db.scalar(
+            select(func.count()).select_from(Fixture).where(played_condition())
+        )
+        not_played = db.scalar(
+            select(func.count()).select_from(Fixture).where(not_played_condition())
+        )
+        assert played == 1
+        assert not_played == len(fixtures) - 1   # NULL được đọc là "chưa đá"
+        assert played + not_played == len(fixtures)
+    finally:
+        by_id = {f.id: f for f in fixtures}
+        for fid, was, was_prov in original:
+            by_id[fid].finished = was
+            by_id[fid].finished_provisional = was_prov
         db.flush()
         db.rollback()

@@ -33,6 +33,7 @@ from app.engine.team_strength import (
 )
 from app.models import Fixture, Player, Team
 from app.services.common import planning_start_gw, team_lookup
+from app.services.season_state import is_played
 
 # Vai trò mặc định của bảng chính. Tiền vệ là vai trò đông nhất trong một đội hình
 # FPL và là vai trò duy nhất ăn điểm cả từ tấn công lẫn sạch lưới, nên nó là mặc
@@ -44,7 +45,7 @@ def _build_ts(db: Session) -> TeamStrength:
     teams = db.scalars(select(Team)).all()
     players = db.scalars(select(Player)).all()
     all_fixtures = db.scalars(select(Fixture)).all()
-    finished = [f for f in all_fixtures if f.finished]
+    finished = [f for f in all_fixtures if is_played(f)]
     return TeamStrength(
         teams, players, finished,
         market=load_market_map(db),

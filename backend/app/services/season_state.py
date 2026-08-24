@@ -22,7 +22,7 @@ Prior-season data is also down-weighted where its relevance is in doubt:
 """
 from __future__ import annotations
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.config import settings
@@ -30,6 +30,50 @@ from app.models import ExpectedMinutes, Fixture, Player
 
 # Matches per team below which the current season cannot outweigh the last one.
 EARLY_SEASON_MATCHES = 6
+
+
+def played_condition():
+    """Điều kiện SQL cho "trận này đã đá xong rồi".
+
+    KHÔNG dùng riêng `Fixture.finished`: FPL chỉ bật cờ đó khi cả vòng được
+    data-check, tức là nhiều ngày sau khi bóng đã lăn. Đo 2026-08-22, vòng 1 mùa
+    2026/27: trận Arsenal 3-0 tối 21/08 đã có `minutes=90`, tỷ số cuối và điểm
+    thưởng đã chốt (3/2/1), nhưng `finished=false` — chỉ `finished_provisional`
+    là true, và `events[0].data_checked` cũng còn false.
+
+    Hậu quả của việc đếm sai chỗ này không nằm ở một con số lẻ: `stats_season()`
+    dùng nó để trả lời "các tổng cả-mùa trong bảng `players` thuộc mùa nào", và
+    câu trả lời đó quyết định engine có quy đổi BPS sang luật mùa mới hay không.
+    FPL reset thống kê ngay tại hạn vòng 1, nên trong khoảng chờ data-check, số
+    liệu ĐÃ là của mùa mới trong khi cờ `finished` vẫn nói chưa đá trận nào —
+    engine quy đổi BPS một lần thừa, và cả trang vẫn dán nhãn PRE-SEASON.
+
+    `finished_provisional` là NULL ở những hàng ghi trước khi có cột này, nên
+    phải OR với `finished` — NULL nghĩa là "chưa đồng bộ trường đó", không phải
+    "chưa đá".
+    """
+    return or_(Fixture.finished.is_(True), Fixture.finished_provisional.is_(True))
+
+
+def not_played_condition():
+    """Phủ định của `played_condition()` — viết tay vì NULL không phủ định được.
+
+    `NOT (false OR NULL)` ra NULL chứ không ra true, nên `~played_condition()` sẽ
+    LOẠI mọi trận chưa đá thuộc hàng cũ (nơi `finished_provisional` là NULL) —
+    lặng lẽ, không lỗi. Ở đây NULL phải được đọc là "chưa đá".
+    """
+    return and_(
+        Fixture.finished.is_(False),
+        or_(
+            Fixture.finished_provisional.is_(False),
+            Fixture.finished_provisional.is_(None),
+        ),
+    )
+
+
+def is_played(fixture: Fixture) -> bool:
+    """Cùng câu hỏi với `played_condition()`, cho danh sách đã nạp sẵn trong Python."""
+    return bool(fixture.finished or fixture.finished_provisional)
 
 
 def _configured_ids(raw: str) -> set[str]:
@@ -75,7 +119,7 @@ def stats_season(db: Session, current_season: str | None = None) -> str | None:
     from app import bps_rules, scoring
 
     finished = db.scalar(
-        select(func.count()).select_from(Fixture).where(Fixture.finished.is_(True))
+        select(func.count()).select_from(Fixture).where(played_condition())
     ) or 0
     current = current_season or scoring.SEASON
     if finished == 0:
@@ -100,13 +144,13 @@ def classify_phase(finished: int, max_team_matches: int) -> tuple[str, str | Non
 def season_state(db: Session) -> dict:
     """Phase, evidence counts and the system-wide confidence label."""
     finished = db.scalar(
-        select(func.count()).select_from(Fixture).where(Fixture.finished.is_(True))
+        select(func.count()).select_from(Fixture).where(played_condition())
     ) or 0
 
     # Matches for the busiest team — a blank/uneven start should not read as
     # "the season has begun" for everybody.
     per_team: dict[int, int] = {}
-    for f in db.scalars(select(Fixture).where(Fixture.finished.is_(True))).all():
+    for f in db.scalars(select(Fixture).where(played_condition())).all():
         per_team[f.team_h] = per_team.get(f.team_h, 0) + 1
         per_team[f.team_a] = per_team.get(f.team_a, 0) + 1
     max_team_matches = max(per_team.values()) if per_team else 0

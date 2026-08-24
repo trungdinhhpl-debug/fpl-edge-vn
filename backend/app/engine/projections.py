@@ -36,6 +36,7 @@ from app.models import (
     Team,
 )
 from app.scoring import RULES
+from app.services.season_state import is_played
 
 
 def get_planning_start_gw(db: Session) -> int:
@@ -166,7 +167,10 @@ def build_projections(
     teams = db.scalars(select(Team)).all()
     players = db.scalars(select(Player)).all()
     fixtures = db.scalars(select(Fixture)).all()
-    finished = [f for f in fixtures if f.finished]
+    # `is_played`, không phải `f.finished`: FPL giữ cờ đó tắt cho tới khi cả vòng
+    # được data-check, nên một vòng đã đá xong vẫn ra matches_played = 0 trong
+    # nhiều ngày — xMins chạy ở chế độ tiền mùa và nhãn trang nói ngược lại số.
+    finished = [f for f in fixtures if is_played(f)]
 
     market = load_market_map(db)
     ts = TeamStrength(

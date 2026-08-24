@@ -5,6 +5,7 @@ flag stale / errored sources.
 """
 from __future__ import annotations
 
+from collections import defaultdict
 from datetime import datetime, timezone
 
 from sqlalchemy import delete, func, select
@@ -19,6 +20,7 @@ from app.models import (
     Gameweek,
     InjuryReport,
     Player,
+    PlayerGameweekStat,
     PlayerPrice,
     Season,
     SeasonRules,
@@ -27,6 +29,7 @@ from app.models import (
 )
 from app.providers.expert_provider import ExpertProvider, compute_signal_score
 from app.providers.fpl_client import FPLClient
+from app.services.season_state import not_played_condition, played_condition
 
 
 # ------------------------------------------------------------- parse helpers --
@@ -283,6 +286,7 @@ def sync_fixtures(db: Session, client: FPLClient) -> dict:
             team_a_difficulty=f.get("team_a_difficulty"),
             team_h_score=f.get("team_h_score"), team_a_score=f.get("team_a_score"),
             finished=f.get("finished", False), started=f.get("started", False),
+            finished_provisional=f.get("finished_provisional"),
         ))
         n += 1
     _log(db, "FPL fixtures", url, "ok", n)
@@ -291,6 +295,151 @@ def sync_fixtures(db: Session, client: FPLClient) -> dict:
     # mark blank/double gameweeks by counting fixtures per team per event
     _annotate_gameweeks(db)
     return {"fixtures": n}
+
+
+# ------------------------------------------- thống kê thật theo từng trận ----
+def sync_player_gameweek_stats(db: Session, client: FPLClient) -> dict:
+    """Số liệu THẬT của từng cầu thủ trong từng trận, đổ vào `player_gameweek_stats`.
+
+    Nguồn là `/event/{gw}/live/`: MỘT lệnh cho cả vòng đấu, thay vì một lệnh cho
+    mỗi cầu thủ như `element-summary` (~600 lệnh mỗi lần đồng bộ, chạy 4 lần một
+    ngày). Trường `explain[].fixture` cho biết dòng đó thuộc trận nào nên vẫn ghi
+    được đúng khoá (player_id, fixture_id).
+
+    Hai điều đã đo trên dữ liệu thật (vòng 1 mùa 2026/27, 2026-08-22), không suy
+    luận lại:
+
+    1. **`explain` có mặt cho CẢ cầu thủ mà câu lạc bộ chưa đá.** Lúc mới xong
+       9/10 trận, cả 609/609 phần tử đều có đúng một mục `explain` — 330 mục
+       trong đó là 0 phút, và phần lớn chỉ vì trận chưa diễn ra. Ghi thẳng chúng
+       vào bảng sẽ biến "chưa tới lượt" thành "có cơ hội mà không được đá", tức
+       bịa ra bằng chứng xoay tua. Nên chỉ ghi trận đã đá (`played_condition`).
+    2. **Vòng đôi thì `stats` là TỔNG của hai trận** trong khi `explain` có hai
+       mục — không tách được. Riêng những người đó phải hỏi `element-summary`,
+       nơi `history` là từng trận một. Vòng 1 không có ai như vậy, nên nhánh này
+       hiếm khi chạy và không kéo theo chi phí thường trực.
+    """
+    played = {
+        f.id: f for f in db.scalars(select(Fixture).where(played_condition())).all()
+    }
+    if not played:
+        return {"gameweeks": 0, "rows": 0, "reason": "chưa có trận nào đá xong"}
+
+    by_event: dict[int, set[int]] = defaultdict(set)
+    for f in played.values():
+        if f.event is not None:
+            by_event[f.event].add(f.id)
+
+    known_players = set(db.scalars(select(Player.id)).all())
+    checked = {g.id: g.data_checked for g in db.scalars(select(Gameweek)).all()}
+    existing = {
+        (r.player_id, r.fixture_id): r
+        for r in db.scalars(select(PlayerGameweekStat)).all()
+    }
+    stored_fixtures = {fid for _, fid in existing}
+
+    written = 0
+    fetched_gws = 0
+    dgw_players = 0
+    for gw in sorted(by_event):
+        # Vòng đã được FPL data-check thì số không đổi nữa — chỉ gọi lại khi còn
+        # thiếu dòng. Nhờ vậy trạng thái ổn định là 1–2 lệnh mỗi lần đồng bộ chứ
+        # không phải 38 lệnh vào cuối mùa.
+        # Đủ điều kiện bỏ qua = FPL đã data-check vòng đó (số không đổi nữa) VÀ mọi
+        # trận của vòng đã có dòng. Đo bằng ĐỘ PHỦ TRẬN, không phải tích cầu thủ ×
+        # trận: chỉ cầu thủ của hai đội trong trận mới có dòng, nên phép so
+        # "đủ mọi cặp" sẽ không bao giờ đúng và vòng nào cũng bị gọi lại.
+        if checked.get(gw) and by_event[gw] <= stored_fixtures:
+            continue
+        try:
+            data = client.event_live(gw)
+        except Exception as exc:
+            _log(db, f"FPL live GW{gw}", f"{settings.fpl_base_url}/event/{gw}/live/",
+                 "error", 0, str(exc)[:300])
+            continue
+        fetched_gws += 1
+
+        multi: list[int] = []
+        for el in data.get("elements", []):
+            pid = el.get("id")
+            if pid not in known_players:
+                continue
+            fixtures_here = [
+                x["fixture"] for x in el.get("explain", [])
+                if x.get("fixture") in played and played[x["fixture"]].event == gw
+            ]
+            if not fixtures_here:
+                continue
+            if len(fixtures_here) > 1:
+                multi.append(pid)      # vòng đôi: `stats` là tổng, phải hỏi riêng
+                continue
+            written += _upsert_gw_stat(
+                db, existing, pid, fixtures_here[0], gw, el.get("stats", {}), played
+            )
+
+        if multi:
+            dgw_players += len(multi)
+            for pid, summary in client.element_summaries(multi).items():
+                for h in summary.get("history", []):
+                    if h.get("round") != gw or h.get("fixture") not in played:
+                        continue
+                    written += _upsert_gw_stat(
+                        db, existing, pid, h["fixture"], gw, h, played
+                    )
+
+    _log(db, "FPL element stats", f"{settings.fpl_base_url}/event/<gw>/live/", "ok",
+         written, f"{fetched_gws} vòng gọi lại, {dgw_players} người ở vòng đôi")
+    db.commit()
+    return {"gameweeks": fetched_gws, "rows": written, "dgw_players": dgw_players}
+
+
+def _upsert_gw_stat(db: Session, existing: dict, player_id: int, fixture_id: int,
+                    gameweek: int, stats: dict, played: dict) -> int:
+    """Ghi/cập nhật một dòng. Trả 1 nếu là dòng mới, 0 nếu chỉ cập nhật.
+
+    Không dùng `db.merge()`: merge khớp theo KHOÁ CHÍNH (`id`), vốn là None với
+    đối tượng mới, nên nó sẽ INSERT mọi lần và vi phạm unique
+    (player_id, fixture_id) ngay lần chạy thứ hai.
+    """
+    fixture = played[fixture_id]
+    # `element-summary` nói thẳng sân nhà/đối thủ; `/event/live/` thì không, nên
+    # suy từ CLB của cầu thủ trong bảng `fixtures`.
+    was_home = stats.get("was_home")
+    opponent = stats.get("opponent_team")
+    if was_home is None or opponent is None:
+        team_id = db.get(Player, player_id).team_id
+        if team_id == fixture.team_h:
+            was_home, opponent = True, fixture.team_a
+        elif team_id == fixture.team_a:
+            was_home, opponent = False, fixture.team_h
+
+    row = existing.get((player_id, fixture_id))
+    fields = dict(
+        minutes=_i(stats.get("minutes")),
+        total_points=_i(stats.get("total_points")),
+        goals_scored=_i(stats.get("goals_scored")),
+        assists=_i(stats.get("assists")),
+        clean_sheets=_i(stats.get("clean_sheets")),
+        goals_conceded=_i(stats.get("goals_conceded")),
+        saves=_i(stats.get("saves")),
+        bonus=_i(stats.get("bonus")),
+        bps=_i(stats.get("bps")),
+        expected_goals=_f(stats.get("expected_goals")),
+        expected_assists=_f(stats.get("expected_assists")),
+        starts=_i(stats.get("starts")),
+        opponent_team=opponent,
+        was_home=None if was_home is None else bool(was_home),
+    )
+    if row is None:
+        row = PlayerGameweekStat(
+            player_id=player_id, fixture_id=fixture_id, gameweek=gameweek, **fields
+        )
+        db.add(row)
+        existing[(player_id, fixture_id)] = row
+        return 1
+    for k, v in fields.items():
+        setattr(row, k, v)
+    return 0
 
 
 def _annotate_gameweeks(db: Session) -> None:
@@ -483,7 +632,7 @@ def sync_odds(db: Session) -> dict:
         return {"matched": 0, "skipped": 0, "enabled": True, "error": str(exc)[:200]}
 
     teams = {t.id: t.name for t in db.scalars(select(Team)).all()}
-    fixtures = db.scalars(select(Fixture).where(Fixture.finished.is_(False))).all()
+    fixtures = db.scalars(select(Fixture).where(not_played_condition())).all()
     by_pair: dict[tuple[int, int], Fixture] = {}
     for f in fixtures:
         by_pair.setdefault((f.team_h, f.team_a), f)
@@ -629,11 +778,21 @@ def _record_model_version(db: Session) -> dict:
     return {"version": v, "recorded": "existing"}
 
 
-def run_full_sync(db: Session, build_proj: bool = True, detail: bool = False) -> dict:
+def run_full_sync(db: Session, build_proj: bool = True,
+                  detail: bool | None = None) -> dict:
+    # None = theo cấu hình (SYNC_PLAYERS_DETAIL). Người gọi vẫn ép được True/False,
+    # nhưng mặc định `False` cứng như trước sẽ khiến biến môi trường không có tác
+    # dụng ở chính chỗ chạy thật là GitHub Actions.
+    if detail is None:
+        detail = settings.sync_players_detail
     result: dict = {"started_at": datetime.now(timezone.utc).isoformat()}
     with FPLClient() as client:
         result["bootstrap"] = sync_bootstrap(db, client)
         result["fixtures"] = sync_fixtures(db, client)
+        # Phải nằm TRƯỚC build_projections: engine đọc `player_gameweek_stats` để
+        # có phút thi đấu từng vòng và xG từng trận.
+        if detail:
+            result["player_stats"] = sync_player_gameweek_stats(db, client)
     result["experts"] = seed_experts(db)
     result["expert_signals"] = sync_expert_signals(db)
     # Đóng vòng lặp đo lường: dự báo đã phát ra phải được chấm bằng kết quả thật,

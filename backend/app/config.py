@@ -133,7 +133,11 @@ class Settings(BaseSettings):
     # ---- Ingestion / jobs ----
     auto_sync_on_startup: bool = True      # run a sync if the DB looks empty
     enable_scheduler: bool = False         # APScheduler background refresh
-    sync_players_detail: bool = False      # also pull per-player element-summary (slow: ~700 calls)
+    # Số liệu thật từng trận (`player_gameweek_stats`). Nguồn là /event/{gw}/live/
+    # — một lệnh cho cả vòng, không phải ~700 lệnh element-summary — nên bật mặc
+    # định. Không có bảng này thì xMins không có "recent games", xG theo từng trận
+    # trống, và fill_outcomes không chấm được dự báo sau mỗi vòng.
+    sync_players_detail: bool = True
 
     # ---- Modelling ----
     projection_horizon: int = 8            # gameweeks the engine projects ahead
