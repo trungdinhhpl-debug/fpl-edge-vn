@@ -546,6 +546,7 @@ def build_projections(
                     minutes_season=p.minutes, xp=xp, goal_dependency=goal_dep,
                     goals_scored=p.goals_scored, expected_goals=p.expected_goals,
                     variance=mc["variance"],
+                    team_matches_played=matches_played.get(team.id, 0),
                 )
                 overall = risk_mod.combine(mr, pr)
                 conf = risk_mod.confidence_from(

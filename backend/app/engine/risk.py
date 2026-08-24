@@ -27,6 +27,13 @@ def minutes_risk(p_start: float, status: str, p_no_play: float) -> str:
     return _bucket(min(score, 1.0))
 
 
+# Phần phút của đội mà cầu thủ thực sự đá, dưới mức này thì sản lượng của anh ta
+# là một ẩn số lớn. Đo bằng TỶ LỆ chứ không phải số phút tuyệt đối — xem
+# `performance_risk`.
+MINUTES_SHARE_THIN = 0.30
+MINUTES_SHARE_ROTATION = 0.60
+
+
 def performance_risk(
     *,
     minutes_season: int,
@@ -35,11 +42,41 @@ def performance_risk(
     goals_scored: int,
     expected_goals: float,
     variance: float,
+    team_matches_played: int | None = None,
 ) -> str:
-    """High when points rely on a small/over-performing sample or are goal-heavy."""
+    """High when points rely on a small/over-performing sample or are goal-heavy.
+
+    `team_matches_played` biến mốc cỡ mẫu thành TƯƠNG ĐỐI, và nếu thiếu nó thì cột
+    rủi ro tự huỷ trong những vòng đầu mùa. Mốc cũ là 450 phút tuyệt đối; sau vòng
+    1 người nhiều phút nhất giải cũng chỉ có 90, nên **cả 609 cầu thủ cùng bị +0.3**
+    và không ai xuống nổi bucket Low (cần < 0.25). Đo được ngày 2026-08-24 trên
+    production: `performance_risk` ra Medium cho 586 người, High cho 23, Low cho 0.
+
+    Rồi `combine()` khuếch đại: nó cộng thêm một bậc khi CẢ HAI chỉ số ≥ Medium, mà
+    vế này luôn ≥ Medium, nên mọi người có `minutes_risk` ≥ Medium đều bị đẩy lên —
+    404/609 thành "Very High". Một cột giống hệt nhau cho gần như cả giải không chỉ
+    vô dụng mà còn sai lệch, vì người đọc hiểu cột rủi ro theo nghĩa SO SÁNH.
+
+    Đây đúng là cái bẫy FPL reset thống kê đầu mùa: `xmins.py` đã né bằng
+    `games_ref`, `risk.py` thì chưa. Nó nằm im được lâu vì trước đây tiền mùa FPL
+    còn phát tổng phút của MÙA TRƯỚC, nên mốc 450 vẫn có vẻ hoạt động.
+
+    Phần "cả mùa còn ít dữ liệu" KHÔNG mất đi — nó do `confidence_from()` và tấm
+    banner giai đoạn mùa giải mang, đúng chỗ của nó. Cột này trả lời câu khác:
+    người này rủi ro hơn hay kém người kia.
+    """
     score = 0.0
-    # small sample
-    if minutes_season < 450:
+    # Cỡ mẫu: phần phút của đội mà anh ta thực sự đá.
+    available = 90 * team_matches_played if team_matches_played else 0
+    if available > 0:
+        share = minutes_season / available
+        if share < MINUTES_SHARE_THIN:
+            score += 0.3
+        elif share < MINUTES_SHARE_ROTATION:
+            score += 0.15
+    elif minutes_season < 450:
+        # Chưa biết đội đá bao nhiêu trận (chỗ gọi lẻ, hoặc mùa chưa bắt đầu):
+        # giữ nguyên mốc tuyệt đối cũ thay vì đoán.
         score += 0.3
     elif minutes_season < 900:
         score += 0.15

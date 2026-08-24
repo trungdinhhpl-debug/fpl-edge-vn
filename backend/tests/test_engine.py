@@ -746,3 +746,43 @@ def test_a_single_recent_game_is_not_worth_five():
     assert none.p_start > one.p_start > five.p_start
     # nhưng một trận không được mang quá nửa sức nặng của năm trận
     assert (none.p_start - one.p_start) < 0.5 * (none.p_start - five.p_start)
+
+
+def test_sample_size_risk_is_measured_against_what_was_playable():
+    """Mốc cỡ mẫu phải TƯƠNG ĐỐI, nếu không cột rủi ro tự huỷ ở đầu mùa.
+
+    Hồi quy đo trên production 2026-08-24: mốc 450 phút tuyệt đối khiến cả 609 cầu
+    thủ cùng bị +0.3 sau vòng 1 (người nhiều phút nhất giải mới có 90), nên
+    `performance_risk` ra Low cho ĐÚNG 0 người, và `combine()` đẩy 404/609 lên
+    "Very High". Cùng cái bẫy FPL reset thống kê đầu mùa mà `xmins.py` đã né bằng
+    `games_ref`.
+    """
+    from app.engine.risk import performance_risk
+
+    common = dict(xp=4.0, goal_dependency=0.2, goals_scored=0,
+                  expected_goals=0.3, variance=6.0)
+
+    # sau đúng một vòng: đá trọn trận là đã dùng hết phần dữ liệu CÓ THỂ có
+    full = performance_risk(minutes_season=90, team_matches_played=1, **common)
+    none = performance_risk(minutes_season=0, team_matches_played=1, **common)
+    assert full == "Low"
+    assert none != "Low"
+
+    # Giữa mùa hai mốc nói cùng một điều — thay đổi chỉ cắn ở đầu mùa. (Ở
+    # `team_matches_played=20`, mốc mới 30%/60% rơi vào 540/1080 phút còn mốc cũ là
+    # 450/900, nên chỉ so những giá trị nằm ngoài hai dải giao nhau đó.)
+    for minutes in (1500, 700, 300):
+        rel = performance_risk(minutes_season=minutes, team_matches_played=20, **common)
+        abs_ = performance_risk(minutes_season=minutes, **common)   # không truyền = mốc cũ
+        assert rel == abs_, (minutes, rel, abs_)
+
+    # và ba bậc vẫn xếp đúng thứ tự: đá càng ít phần phút của đội, rủi ro càng cao
+    boom = {**common, "goal_dependency": 0.9}
+    levels = ["Low", "Medium", "High", "Very High"]
+    regular = performance_risk(minutes_season=1600, team_matches_played=20, **boom)
+    rotation = performance_risk(minutes_season=800, team_matches_played=20, **boom)
+    fringe = performance_risk(minutes_season=200, team_matches_played=20, **boom)
+    assert levels.index(regular) <= levels.index(rotation) < levels.index(fringe)
+
+    # không biết đội đá bao nhiêu trận thì không đoán: giữ nguyên nhánh tuyệt đối
+    assert performance_risk(minutes_season=90, **common) != "Low"
