@@ -24,7 +24,7 @@ import math
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.config import settings
@@ -640,6 +640,106 @@ def _is_degenerate(xs: list[float]) -> bool:
     return all(x == first for x in xs)
 
 
+def scored_model_versions(db: Session) -> list[dict]:
+    """Phiên bản engine ĐÃ SINH RA từng vòng đã chấm — không phải phiên bản đang chạy.
+
+    Chỉ số ở trang này đo những dự báo bị ĐÓNG BĂNG trước deadline. Engine đổi sau
+    đó thì các con số vẫn mô tả engine cũ, nhưng đầu trang lại in phiên bản của mã
+    đang chạy — nên người đọc kết luận "engine hiện tại đạt Spearman 0.25" cho một
+    engine chưa từng được đo. Thực tế 2026-08-26: vòng 1 được chấm là bộ do
+    `xp-0.6.0` đóng băng, trong khi mã đang chạy là `xp-0.9.0`; giữa hai mốc đó
+    engine đã thay prior phút thi đấu, thêm nền lịch sử cầu thủ và vá λ bàn thua.
+
+    Trả về từng vòng kèm nhãn của chính nó, để trang nói được điều đúng.
+    """
+    # Nhập tại chỗ như phần còn lại của file: `scoring.SEASON` được `load_rules`
+    # cập nhật TẠI CHỖ khi đồng bộ, nên buộc `from app import scoring` ở đây.
+    from app import scoring
+
+    rows = db.execute(
+        select(
+            ProjectionSnapshot.gameweek,
+            ProjectionSnapshot.model_version,
+            func.count(ProjectionSnapshot.id),
+        )
+        .where(
+            ProjectionSnapshot.season == scoring.SEASON,
+            ProjectionSnapshot.actual_points.is_not(None),
+        )
+        .group_by(ProjectionSnapshot.gameweek, ProjectionSnapshot.model_version)
+        .order_by(ProjectionSnapshot.gameweek)
+    ).all()
+    out = [
+        {"gameweek": gw, "model_version": mv, "scored": n}
+        for gw, mv, n in rows
+    ]
+    running = settings.model_version
+    stale = sorted({r["model_version"] for r in out if r["model_version"] != running})
+    for r in out:
+        r["is_running_version"] = r["model_version"] == running
+    if stale:
+        out.append({
+            "note": (
+                "Các chỉ số dưới đây đo engine đã đóng băng dự báo, KHÔNG phải "
+                f"engine đang chạy ({running}). Phiên bản đã được chấm: "
+                + ", ".join(stale)
+                + ". Đừng đọc chúng như đánh giá của mã hiện tại."
+            )
+        })
+    return out
+
+
+def observed_bonus_pool(db: Session) -> dict:
+    """Quỹ bonus THỰC TẾ mỗi trận, đo từ kết quả — không phải hằng số giả định.
+
+    `engine/bonus.allocate` chia đúng `BONUS_POOL_PER_MATCH = 6.0` mỗi trận, và có
+    test cưỡng chế tổng bằng 6. Nhưng 6 là giá trị PHỔ BIẾN NHẤT, không phải giá
+    trị trung bình: hoà BPS làm FPL trao thêm. Đo vòng 1 mùa 2026/27 — 8/10 trận
+    đúng 6, một trận [3,2,2,2] = 9, một trận [3,2,1,1] = 7, tổng 64 thay vì 60.
+
+    Chưa đủ cơ sở để đổi hằng số từ một vòng, nên chỗ này ĐO chứ không sửa. Khi
+    `matches` đủ lớn mà `mean` vẫn nằm trên 6 một cách ổn định thì mới chỉnh —
+    và lúc đó đây chính là bằng chứng.
+    """
+    from app.engine.bonus import BONUS_POOL_PER_MATCH
+    from app.models import PlayerGameweekStat
+
+    rows = db.execute(
+        select(
+            PlayerGameweekStat.fixture_id,
+            func.sum(PlayerGameweekStat.bonus),
+        )
+        .where(PlayerGameweekStat.bonus > 0)
+        .group_by(PlayerGameweekStat.fixture_id)
+    ).all()
+    totals = [float(t or 0) for _, t in rows]
+    if not totals:
+        return {
+            "assumed": BONUS_POOL_PER_MATCH,
+            "matches": 0,
+            "status": "chưa có dữ liệu",
+            "note": (
+                "Cần `player_gameweek_stats` — bật SYNC_PLAYERS_DETAIL và đợi một "
+                "vòng kết thúc."
+            ),
+        }
+    mean = sum(totals) / len(totals)
+    return {
+        "assumed": BONUS_POOL_PER_MATCH,
+        "observed_mean": round(mean, 3),
+        "observed_total": round(sum(totals), 1),
+        "matches": len(totals),
+        "exactly_six": sum(1 for t in totals if abs(t - 6.0) < 1e-9),
+        "above_six": sum(1 for t in totals if t > 6.0 + 1e-9),
+        "shortfall_pct": round(100 * (mean - BONUS_POOL_PER_MATCH) / BONUS_POOL_PER_MATCH, 2),
+        "note": (
+            "Quỹ 6 điểm là giá trị phổ biến nhất, không phải trung bình — hoà BPS "
+            "làm FPL trao thêm. Đây là số ĐO ĐƯỢC; hằng số chỉ nên đổi khi mẫu đủ "
+            "lớn, không phải sau một vòng."
+        ),
+    }
+
+
 def player_metrics(db: Session) -> dict:
     """Sáu chỉ số dự báo cầu thủ × ba cột (mô hình / form FPL / kèo)."""
     s = _collect(db)
@@ -1011,13 +1111,18 @@ def model_performance(db: Session) -> dict:
 
     return {
         "season": scoring.SEASON,
+        # Phiên bản engine ĐANG CHẠY — KHÔNG phải phiên bản đã sinh ra các chỉ số
+        # bên dưới. Hai thứ này lệch nhau bất cứ khi nào engine đổi sau một vòng đã
+        # chấm, và mặc định người đọc sẽ gán kết quả cũ cho engine mới.
         "model_version": settings.model_version,
+        "scored_model_versions": scored_model_versions(db),
         "state": {
             "snapshots": n_snapshots,
             "snapshots_scored": n_scored,
             "gameweeks_finished": len(finished),
             "archiving_active": snapshots is not None,
         },
+        "bonus_pool": observed_bonus_pool(db),
         "player_forecasting": player_metrics(db),
         "decisions": decision_metrics(db),
         "how_it_works": [

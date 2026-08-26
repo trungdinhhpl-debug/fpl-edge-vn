@@ -453,3 +453,90 @@ def test_captain_hit_rate_computes_per_list_when_outcomes_exist(db):
         row.deadline_time = original
         db.flush()
         db.rollback()
+
+
+def test_page_reports_the_engine_that_made_the_forecast_not_the_one_running(db):
+    """Chỉ số đo engine ĐÃ ĐÓNG BĂNG dự báo, không phải engine đang chạy.
+
+    Hồi quy thật 2026-08-26: vòng 1 được chấm là bộ do `xp-0.6.0` đóng băng trước
+    deadline 21/08, nhưng đầu trang in `model_version` của mã đang chạy —
+    `xp-0.9.0`. Giữa hai mốc đó engine đã thay prior phút thi đấu, thêm nền lịch sử
+    cầu thủ và vá λ bàn thua. Người đọc kết luận "engine hiện tại đạt Spearman
+    0.25" cho một engine chưa từng được đo.
+    """
+    from app import scoring
+    from app.config import settings
+    from app.models import ProjectionSnapshot
+    from app.services.model_performance import scored_model_versions
+
+    old_version = "xp-0.0.1-test"
+    assert old_version != settings.model_version
+    rows = [
+        ProjectionSnapshot(
+            season=scoring.SEASON, gameweek=1, player_id=pid, xp=1.0,
+            actual_points=2, model_version=old_version, is_locked=True,
+        )
+        for pid in _some_player_ids(db, 3)
+    ]
+    try:
+        for r in rows:
+            db.add(r)
+        db.flush()
+
+        out = scored_model_versions(db)
+        gw_rows = [r for r in out if "gameweek" in r]
+        assert gw_rows, "vòng đã chấm phải xuất hiện"
+        assert all(r["model_version"] == old_version for r in gw_rows)
+        assert all(r["is_running_version"] is False for r in gw_rows)
+
+        notes = [r["note"] for r in out if "note" in r]
+        assert notes, "lệch phiên bản thì phải cảnh báo, không im lặng"
+        assert old_version in notes[0]
+        assert settings.model_version in notes[0]
+    finally:
+        db.rollback()
+
+
+def _some_player_ids(db, n):
+    from sqlalchemy import select
+
+    from app.models import Player
+
+    return [p for p in db.scalars(select(Player.id).limit(n)).all()]
+
+
+def test_bonus_pool_is_measured_not_assumed(db):
+    """Quỹ 6 điểm là giá trị PHỔ BIẾN NHẤT, không phải trung bình.
+
+    Hoà BPS làm FPL trao thêm: đo vòng 1 mùa 2026/27, 8/10 trận đúng 6, một trận
+    [3,2,2,2] = 9, một trận [3,2,1,1] = 7 — tổng 64 chứ không phải 60. Engine chia
+    cứng 6.0 nên hụt ~6.7%. Chỗ này ĐO để về sau có cơ sở, chứ không tự đổi hằng số
+    từ một vòng.
+    """
+    from app.engine.bonus import BONUS_POOL_PER_MATCH
+    from app.models import PlayerGameweekStat
+    from app.services.model_performance import observed_bonus_pool
+
+    pids = _some_player_ids(db, 4)
+    try:
+        db.query(PlayerGameweekStat).delete()
+        db.flush()
+        # một trận chia đúng 6, một trận hoà BPS nên thành 9
+        for fixture, split in ((9001, [3, 2, 1]), (9002, [3, 2, 2, 2])):
+            for i, b in enumerate(split):
+                db.add(PlayerGameweekStat(
+                    player_id=pids[i % len(pids)], gameweek=1,
+                    fixture_id=fixture,
+                    minutes=90, bonus=b,
+                ))
+        db.flush()
+
+        out = observed_bonus_pool(db)
+        assert out["assumed"] == BONUS_POOL_PER_MATCH
+        assert out["matches"] == 2
+        assert out["observed_total"] == 15.0
+        assert out["observed_mean"] == 7.5
+        assert out["exactly_six"] == 1 and out["above_six"] == 1
+        assert out["shortfall_pct"] > 0      # engine đang chia thiếu
+    finally:
+        db.rollback()

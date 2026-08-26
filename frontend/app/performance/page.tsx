@@ -15,6 +15,18 @@ export default function PerformancePage() {
   const { data, error, reload } = useApi<any>("/api/model/performance");
   const st = data?.state ?? {};
 
+  // Chỉ số ở trang này đo dự báo ĐÃ ĐÓNG BĂNG, nên chúng mô tả engine lúc đó chứ
+  // không phải engine đang chạy. Backend trả nhãn của từng vòng kèm lời cảnh báo
+  // khi hai thứ lệch nhau; không hiện ra thì người đọc mặc định gán kết quả cũ cho
+  // mã mới.
+  const scoredVersions: any[] = (data?.scored_model_versions ?? []).filter(
+    (v: any) => v?.gameweek !== undefined,
+  );
+  const versionNote: string | undefined = (data?.scored_model_versions ?? []).find(
+    (v: any) => v?.note,
+  )?.note;
+  const bonus = data?.bonus_pool;
+
   // Tiêu đề luôn hiển thị, kể cả khi đang tải hoặc lỗi. Bản đầu return sớm nên
   // trang chỉ ra một spinner trần không tiêu đề — và khi backend chưa kịp deploy
   // endpoint thì người dùng chỉ thấy một khung lỗi không rõ của trang nào.
@@ -61,7 +73,7 @@ export default function PerformancePage() {
           Mùa: <b className="text-foreground">{data.season}</b>
         </span>
         <span>
-          Model: <b className="text-foreground">{data.model_version}</b>
+          Engine đang chạy: <b className="text-foreground">{data.model_version}</b>
         </span>
         <span>
           Dự báo đã đóng băng: <b className="text-foreground">{st.snapshots ?? 0}</b>
@@ -78,6 +90,46 @@ export default function PerformancePage() {
           <Badge className="bg-negative/15 text-negative">CHƯA lưu trữ dự báo</Badge>
         )}
       </div>
+
+      {versionNote && (
+        <Card className="border-caution/50">
+          <CardContent className="pt-4 text-sm">
+            <b className="text-foreground">Số dưới đây KHÔNG đo engine đang chạy.</b>{" "}
+            <span className="text-muted-foreground">{versionNote}</span>
+            {scoredVersions.length > 0 && (
+              <div className="mt-2 flex flex-wrap gap-2">
+                {scoredVersions.map((v: any) => (
+                  <Badge
+                    key={`${v.gameweek}-${v.model_version}`}
+                    className={
+                      v.is_running_version
+                        ? "bg-positive/15 text-positive"
+                        : "bg-caution/15 text-caution"
+                    }
+                  >
+                    GW{v.gameweek}: {v.model_version} ({v.scored})
+                  </Badge>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {bonus && bonus.matches > 0 && Math.abs(bonus.shortfall_pct) >= 1 && (
+        <Card className="border-caution/50">
+          <CardContent className="pt-4 text-sm">
+            <b className="text-foreground">
+              Quỹ bonus thực tế {bonus.observed_mean} điểm/trận
+            </b>{" "}
+            <span className="text-muted-foreground">
+              — engine đang chia cứng {bonus.assumed}, tức hụt{" "}
+              {bonus.shortfall_pct}% ({bonus.exactly_six}/{bonus.matches} trận đúng{" "}
+              {bonus.assumed}, {bonus.above_six} trận vượt do hoà BPS). {bonus.note}
+            </span>
+          </CardContent>
+        </Card>
+      )}
 
       {st.gameweeks_finished === 0 && (
         <Card className="border-caution/50">
