@@ -17,6 +17,7 @@ from app.services.experts import expert_consensus
 from app.services.news import news_centre, news_feed
 from app.services.players import compare_players, list_players, player_detail
 from app.services.season_state import data_as_of, last_completed_gameweek
+from app.services.xp_detail import xp_goal_detail
 
 router = APIRouter()
 
@@ -75,6 +76,23 @@ def get_player_scorecard(player_id: int, gameweek: int | None = None,
     if not d:
         raise HTTPException(404, "Player not found")
     return d
+
+
+@router.get("/players/{player_id}/xp-detail")
+def get_player_xp_detail(
+    player_id: int,
+    gameweek: int | None = None,
+    db: Session = Depends(get_db),
+) -> dict:
+    """Chi tiết thành phần ghi bàn của xP(1): từng trận, nguồn, độ tin cậy.
+
+    Vòng đôi trả hai dòng trong `fixtures` rồi cộng lại; vòng trắng trả
+    `is_blank=true` với `xp_delta = 0`.
+    """
+    data = xp_goal_detail(db, player_id, gameweek)
+    if not data:
+        raise HTTPException(404, "Player not found")
+    return data
 
 
 @router.get("/players/{player_id}/projections")

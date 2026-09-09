@@ -11,6 +11,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
     func,
 )
 from sqlalchemy.orm import Mapped, mapped_column
@@ -204,5 +205,174 @@ class OptimizationRun(Base):
     result_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     model_version: Mapped[str] = mapped_column(String(32))
     created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+# ------------------------------------- player goal odds (Tier-2, theo trận) ----
+class PlayerGoalOdds(Base):
+    """Kèo "ghi bàn bất kỳ lúc nào" cho MỘT cầu thủ trong MỘT trận.
+
+    Ghi bởi ingestion nên code lúc xử lý request không bao giờ gọi API (bảo vệ
+    quota tháng), giống `market_odds`. Khác `market_odds` ở chỗ khoá duy nhất là
+    CẶP (fixture_id, player_id) chứ không phải fixture_id.
+
+    Lưu cả số nhà cái có đủ hai cửa Yes/No (`n_devigged`): chỉ giá đã loại biên mới
+    được đưa vào xP, phần còn lại chỉ để hiển thị tham khảo. Xem
+    app/engine/goal_market.py.
+    """
+
+    __tablename__ = "player_goal_odds"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    fixture_id: Mapped[int] = mapped_column(Integer, index=True)
+    player_id: Mapped[int] = mapped_column(ForeignKey("players.id"), index=True)
+    gameweek: Mapped[int | None] = mapped_column(Integer, index=True, nullable=True)
+
+    # Xác suất đồng thuận (trung vị giữa các nhà cái ĐÃ loại biên trong nội bộ từng
+    # nhà cái). KHÔNG chuẩn hoá giữa các cầu thủ — nhiều người cùng ghi bàn được.
+    prob: Mapped[float] = mapped_column(Float, default=0.0)
+    # Xác suất trung vị của TẤT CẢ giá, kể cả chưa loại biên — chỉ để hiển thị.
+    prob_raw: Mapped[float | None] = mapped_column(Float, nullable=True)
+    n_bookmakers: Mapped[int] = mapped_column(Integer, default=0)
+    n_devigged: Mapped[int] = mapped_column(Integer, default=0)
+    best_price_yes: Mapped[float | None] = mapped_column(Float, nullable=True)
+    best_price_no: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    # Điều kiện áp dụng: unknown | appears | any (xem engine/goal_market.py).
+    # "unknown" là mặc định và nghĩa là CHỈ THAM KHẢO, không vào xP.
+    condition: Mapped[str] = mapped_column(String(16), default="unknown")
+    source_name: Mapped[str] = mapped_column(String(48), default="odds_api")
+    bookmaker_names: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    # Thời điểm nhà cái cập nhật giá (khác thời điểm ta lấy về).
+    market_updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    fetched_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint("fixture_id", "player_id", name="uq_goal_odds_fixture_player"),
+    )
+
+
+# ------------------------------- bản ghi ghi bàn theo cầu thủ & theo trận ------
+class PlayerFixtureGoals(Base):
+    """Số bàn kỳ vọng của MỘT cầu thủ trong MỘT trận, trước và sau điều chỉnh.
+
+    Đây là bảng mà phần nâng cấp xP(1) đứng trên: mọi thứ ở cấp **từng trận**, nên
+    vòng đôi là hai dòng rồi cộng lại, còn vòng trắng là không có dòng nào (xP = 0).
+    Bị **xoá và ghi lại** cho mỗi vòng trong tầm dự báo mỗi lần chạy engine, cùng
+    nhịp với `player_projections` — đó là lý do làm mới nhiều lần không bao giờ cộng
+    dồn điều chỉnh.
+
+    Trường nào chưa có nguồn thì để **NULL**, không điền số bịa: `tactical_role`
+    null nghĩa là chưa biết vai trò, và khi đó `position_factor` đúng bằng 1.0.
+    """
+
+    __tablename__ = "player_fixture_goals"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    player_id: Mapped[int] = mapped_column(ForeignKey("players.id"), index=True)
+    fixture_id: Mapped[int] = mapped_column(Integer, index=True)
+    gameweek: Mapped[int] = mapped_column(Integer, index=True)
+    # Vị trí FPL để tính điểm (1 GK, 2 DEF, 3 MID, 4 FWD) — nguồn của điểm/bàn.
+    element_type: Mapped[int] = mapped_column(Integer, default=0)
+    opponent_team: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    was_home: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+
+    # ---- vai trò chiến thuật (NULL = chưa có nguồn, KHÔNG suy từ GK/DEF/MID/FWD) --
+    tactical_role: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    role_source: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    role_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    # ---- phút thi đấu theo kịch bản ----
+    p_start: Mapped[float] = mapped_column(Float, default=0.0)
+    p_sub: Mapped[float] = mapped_column(Float, default=0.0)
+    minutes_if_start: Mapped[float | None] = mapped_column(Float, nullable=True)
+    minutes_if_sub: Mapped[float | None] = mapped_column(Float, nullable=True)
+    xmins: Mapped[float] = mapped_column(Float, default=0.0)
+
+    # ---- số bàn kỳ vọng, tách bóng sống / bóng chết / penalty ----
+    exp_goals_model: Mapped[float] = mapped_column(Float, default=0.0)
+    exp_goals_open: Mapped[float] = mapped_column(Float, default=0.0)
+    exp_goals_penalty: Mapped[float] = mapped_column(Float, default=0.0)
+    # Bóng chết (không tính 11m) chưa có nguồn tách riêng trong dữ liệu FPL ->
+    # NULL, không phải 0: "không đo được" khác "đo được và bằng 0".
+    exp_goals_set_piece: Mapped[float | None] = mapped_column(Float, nullable=True)
+    exp_goals_adjusted: Mapped[float] = mapped_column(Float, default=0.0)
+    exp_goals_final: Mapped[float] = mapped_column(Float, default=0.0)
+
+    # ---- thị trường ----
+    market_prob: Mapped[float | None] = mapped_column(Float, nullable=True)
+    market_exp_goals: Mapped[float | None] = mapped_column(Float, nullable=True)
+    market_r90: Mapped[float | None] = mapped_column(Float, nullable=True)
+    market_condition: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    market_usable: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    market_weight: Mapped[float | None] = mapped_column(Float, nullable=True)
+    market_source: Mapped[str | None] = mapped_column(String(48), nullable=True)
+    market_n_bookmakers: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    market_updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    market_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # ---- điểm yếu đối thủ theo trục vị trí ----
+    weakness_axis: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    axis_factor: Mapped[float | None] = mapped_column(Float, nullable=True)
+    position_factor: Mapped[float] = mapped_column(Float, default=1.0)
+    finishing_share: Mapped[float | None] = mapped_column(Float, nullable=True)
+    weakness_sample_90s: Mapped[float | None] = mapped_column(Float, nullable=True)
+    weakness_reliability: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    weakness_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # ---- ảnh hưởng lên xP của CHÍNH trận này ----
+    goal_points: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    xp_before: Mapped[float] = mapped_column(Float, default=0.0)
+    xp_after: Mapped[float] = mapped_column(Float, default=0.0)
+    xp_delta: Mapped[float] = mapped_column(Float, default=0.0)
+
+    model_version: Mapped[str] = mapped_column(String(32), default="")
+    data_cutoff: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "player_id", "fixture_id", name="uq_player_fixture_goals"
+        ),
+    )
+
+
+# ----------------------------------------- vai trò chiến thuật của cầu thủ ----
+class PlayerRole(Base):
+    """Vai trò chiến thuật (LW/RW/ST/AM/CM/DM/LB/RB/LWB/RWB/CB/GK) của một cầu thủ.
+
+    FPL API KHÔNG có dữ liệu này, và nó **không được suy ra từ nhãn GK/DEF/MID/FWD**
+    — xem `app/engine/roles.py`. Bảng này giữ vai trò lấy từ nguồn ngoài đã khai báo
+    (hiện là API công khai của Premier League, `app/providers/pl_positions.py`).
+
+    `role` cho phép NULL **có chủ ý**: nguồn có những nhãn không quy được về một vai
+    trò (`"Left/Right Winger"` — đá cả hai biên) hoặc chỉ thô bằng FPL
+    (`"Midfielder"`). Những hàng đó vẫn được ghi lại kèm `raw_label` và `reason`, để
+    giao diện nói được "nguồn có nói, nhưng nói không đủ rõ" thay vì im lặng — hai
+    tình huống rất khác nhau với người đọc.
+    """
+
+    __tablename__ = "player_roles"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    player_id: Mapped[int] = mapped_column(
+        ForeignKey("players.id"), unique=True, index=True
+    )
+    role: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    # Nhãn nguyên văn của nguồn, giữ lại để đối chiếu khi nguồn đổi cách viết.
+    raw_label: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Tên và CLB theo nguồn — dùng để kiểm tra khớp tên có đúng người không.
+    source_name: Mapped[str] = mapped_column(String(64), default="")
+    source_url: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    external_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    external_club: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    season_label: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    fetched_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

@@ -1,5 +1,5 @@
 "use client";
-import { useMemo, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ChevronDown, ChevronUp, ChevronsUpDown } from "lucide-react";
 import { useApi } from "@/lib/api";
@@ -7,6 +7,7 @@ import { useT } from "@/lib/i18n";
 import { Card, CardContent, Select, Input, Spinner, ErrorBox, Badge } from "@/components/ui";
 import { PosTag, RiskBadge, StatusDot } from "@/components/fpl";
 import { SortControl, type SortDir } from "@/components/sort-control";
+import { XpGoalDetail, XpOneCell } from "@/components/xp-detail";
 import { fmt } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
@@ -47,6 +48,9 @@ export default function PlayersPage() {
   const [sort, setSort] = useState<SortKey>("xp_next5");
   const [dir, setDir] = useState<SortDir>("desc");
   const [showAll, setShowAll] = useState(false);
+  // Cầu thủ đang mở bảng chi tiết xP(1). Một dòng mỗi lúc: mở dòng khác thì dòng
+  // cũ đóng lại, nên bảng không bị đẩy dài ra vì người đọc quên đóng.
+  const [openXp, setOpenXp] = useState<number | null>(null);
 
   const query =
     `/api/players?limit=1000` +
@@ -114,6 +118,8 @@ export default function PlayersPage() {
         <h1 className="text-2xl font-bold">{t("players")}</h1>
         <p className="text-sm text-muted-foreground">
           Lọc theo xP, xMins, giá trị, rủi ro — mọi cột đều dựa trên mô hình dữ liệu nền tảng.
+          Bấm vào số ở cột <b>xP (1)</b> để xem đối thủ, phút dự kiến, xác suất ghi bàn của
+          thị trường, vai trò chiến thuật và nguồn dữ liệu của chính con số đó.
           Cột “CN ròng” là số người mua trừ số người bán trong vòng này: động lượng đám đông,
           không phải dự báo đổi giá (ngưỡng đổi giá của FPL không công khai).
         </p>
@@ -212,8 +218,8 @@ export default function PlayersPage() {
                 </thead>
                 <tbody>
                   {shown.map((p) => (
+                    <Fragment key={p.id}>
                     <tr
-                      key={p.id}
                       onClick={() => router.push(`/players/${p.id}`)}
                       className="cursor-pointer border-b transition hover:bg-muted/40"
                     >
@@ -227,7 +233,14 @@ export default function PlayersPage() {
                       </td>
                       <td className="p-2 text-center"><PosTag pos={p.position} /></td>
                       <td className="p-2 text-right tabular-nums">£{fmt(p.price)}</td>
-                      <td className="p-2 text-right font-semibold tabular-nums text-primary">{fmt(p.xp_next)}</td>
+                      <td className="p-2 text-right">
+                        <XpOneCell
+                          value={p.xp_next}
+                          delta={p.xp_next_goal_delta}
+                          open={openXp === p.id}
+                          onToggle={() => setOpenXp(openXp === p.id ? null : p.id)}
+                        />
+                      </td>
                       <td className="p-2 text-right font-semibold tabular-nums">{fmt(p.xp_next5)}</td>
                       <td className="p-2 text-right tabular-nums text-muted-foreground">{fmt(p.xmins, 0)}'</td>
                       <td className="p-2 text-right tabular-nums">{fmt(p.value_next5)}</td>
@@ -246,6 +259,14 @@ export default function PlayersPage() {
                         {p.net_transfers ? `${p.net_transfers > 0 ? "+" : "−"}${Math.abs(Math.round(p.net_transfers / 1000))}k` : "0"}
                       </td>
                     </tr>
+                    {openXp === p.id && (
+                      <tr className="border-b bg-muted/20">
+                        <td colSpan={11} className="p-3">
+                          <XpGoalDetail playerId={p.id} compact />
+                        </td>
+                      </tr>
+                    )}
+                    </Fragment>
                   ))}
                 </tbody>
               </table>

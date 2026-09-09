@@ -424,9 +424,12 @@ class OddsAPIProvider(ProbabilityProvider):
 
     name = "odds_api"
 
-    def __init__(self, api_key: str, region: str = "uk") -> None:
+    def __init__(self, api_key: str, region: str | None = None) -> None:
         self.api_key = api_key
-        self.region = region
+        # Một chỗ duy nhất khai region cho MỌI lệnh gọi The Odds API: credit tính
+        # theo (số thị trường × số region), nên hai module dùng hai region khác nhau
+        # là nhân đôi chi phí mà không ai thấy.
+        self.region = region or settings.odds_region
 
     def _markets(self) -> str:
         return "h2h,totals,spreads" if settings.odds_include_handicap else "h2h,totals"

@@ -75,6 +75,66 @@ class Settings(BaseSettings):
     # sample. It is a constant, not a fitted parameter — one match's prices
     # cannot identify it. Set 0 to fall back to an independent double-Poisson.
     odds_dixon_coles_rho: float = -0.13
+    # Region nhà cái dùng cho MỌI lệnh gọi The Odds API. Credit tính theo
+    # (số thị trường × số region), nên thêm region là nhân đôi chi phí.
+    odds_region: str = "uk"
+
+    # ---- Kèo ghi bàn theo cầu thủ (player_goal_scorer_anytime) ----
+    # Tốn 1 credit MỖI TRẬN (tài liệu: credit = số thị trường × số region, và kèo
+    # cầu thủ chỉ lấy được qua endpoint /events/{id}/odds, mỗi lần một trận). Kèo
+    # đội hiện đã tốn 3 credit mỗi lần đồng bộ; ~10 trận một vòng nghĩa là phần này
+    # tốn ~10 credit mỗi lượt lấy. Với gói 500/tháng thì nó PHẢI có ngân sách.
+    odds_player_goals_enabled: bool = True
+    # Số trận tối đa lấy trong MỘT lượt đồng bộ.
+    odds_player_goals_max_fixtures: int = 10
+    # Chỉ gọi lại một trận sau bấy nhiêu giờ kể từ lần lấy thành công gần nhất của
+    # chính trận đó. Lịch đồng bộ 6 tiếng vì thế vẫn chỉ tốn ~10 credit mỗi ngày.
+    odds_player_goals_min_refresh_hours: float = 24.0
+    # Dừng lấy kèo cầu thủ khi quota còn ít hơn mức này. Kèo ĐỘI quan trọng hơn vì
+    # nó đổi λ của mọi cầu thủ, nên nó được ưu tiên phần quota còn lại.
+    odds_player_goals_reserve_credits: int = 30
+    # Điều kiện áp dụng của kèo: unknown | appears | any.
+    #
+    # "unknown" là MẶC ĐỊNH CÓ CHỦ Ý. The Odds API không phát hành luật thanh toán,
+    # nên ta không biết giá là P(ghi bàn) hay P(ghi bàn | ra sân) — hai cách hiểu
+    # cho ra số bàn kỳ vọng khác nhau rõ rệt với cầu thủ có rủi ro ra sân. Khi chưa
+    # xác minh thì kèo chỉ được HIỂN THỊ tham khảo, không đưa vào xP.
+    #
+    # Phần lớn nhà cái ghi "hoàn tiền nếu cầu thủ không ra sân" -> đặt "appears"
+    # SAU KHI tự xác minh trên trang điều khoản của nhà cái mình dùng.
+    odds_player_goals_condition: str = "unknown"
+    # Kèo cũ hơn bấy nhiêu giờ thì CHỈ hiển thị, không đưa vào xP. Đội hình, chấn
+    # thương và cả tỷ lệ cược đổi trong tuần; một giá lấy từ ba ngày trước mô tả một
+    # trận đấu khác với trận sắp đá. Giá trị này phải LỚN HƠN
+    # ODDS_PLAYER_GOALS_MIN_REFRESH_HOURS, nếu không thì mọi giá đều cũ ngay khi vừa
+    # qua ngưỡng làm mới.
+    odds_player_goals_max_age_hours: float = 72.0
+    # Trọng số của thị trường khi pha với mô hình cho thành phần ghi bàn, 0..1.
+    # **GIẢ ĐỊNH CHƯA KIỂM CHỨNG** — đặt bằng trọng số kèo ở cấp đội
+    # (`odds_market_weight`) vì chưa có cơ sở nào để chọn khác; sẽ đo được từ
+    # `projection_snapshots` sau vài chục vòng đã đóng.
+    odds_player_goals_weight: float = 0.7
+
+    # ---- Vai trò chiến thuật & điểm yếu đối thủ theo vị trí ----
+    # Đường dẫn tệp JSON khai vai trò chiến thuật từng cầu thủ (LW/RW/ST/AM/CM/DM/
+    # LB/RB/LWB/RWB/CB/GK). FPL API KHÔNG có dữ liệu này và nó **không được suy ra
+    # từ nhãn GK/DEF/MID/FWD** — xem app/engine/roles.py. Rỗng = tính năng tắt, hệ
+    # số điều chỉnh theo vị trí đúng bằng 1.0 và giao diện nói "Chưa đủ dữ liệu".
+    player_roles_json: str = ""
+    # Lấy vai trò từ API công khai của Premier League (app/providers/pl_positions.py).
+    #
+    # BẬT theo quyết định của người vận hành (2026-09-09). Hai điều kiện kèm theo,
+    # ghi ở đây để lần sau không phải tra lại:
+    #   * robots.txt của premierleague.com cho phép crawl (chỉ chặn tham số truy vấn);
+    #   * Điều khoản sử dụng giới hạn ở "private and personal use" và nói phát hành
+    #     lại cần chấp thuận bằng văn bản — nên giao diện LUÔN ghi nguồn
+    #     ("Nguồn vai trò: Premier League …") ở mọi chỗ hiện vai trò.
+    # Đặt false để tắt lại mà không phải sửa code.
+    pl_positions_enabled: bool = True
+    # Ép dùng một compSeason id cụ thể; để 0 = tự lấy mùa mới nhất từ API.
+    pl_positions_season_id: int = 0
+    # Bật phần điều chỉnh theo vị trí. Tắt thì hệ số luôn 1.0 dù có tệp vai trò.
+    positional_adjustment_enabled: bool = True
 
     # ---- Pre-season down-weighting ----
     # The FPL API publishes neither managers nor transfer history, so a club that
@@ -164,7 +224,16 @@ class Settings(BaseSettings):
     #   theo độ khó trận yếu hơn bóng sống, và bỏ `pen_bump` vốn đếm hai lần. Vòng
     #   đôi: thêm xoay tua (tương quan âm giữa hai lần đá chính, giữ nguyên biên
     #   duyên nên xP không đổi — chỉ phương sai đổi) và mệt mỏi ở trận thứ hai.
-    model_version: str = "xp-0.9.0"
+    # 0.10.0 (2026-09-09): thành phần GHI BÀN của xP được thay theo hai nguồn mới —
+    #   điểm yếu phòng ngự của đối thủ theo TRỤC VỊ TRÍ (đo bằng xG bị cho phép, so
+    #   tương đối trong nội bộ từng đối thủ để không đếm hai lần phần λ đã biết) và
+    #   kèo `player_goal_scorer_anytime` (loại biên trong nội bộ từng nhà cái, đồng
+    #   thuận bằng trung vị, chuyển sang số bàn kỳ vọng qua TỪNG kịch bản phút).
+    #   Công thức: xP_mới = xP_cũ + (bàn mới − bàn cũ) × điểm mỗi bàn; chỉ thành
+    #   phần ghi bàn đổi. Không có nguồn nào thì xP giống hệt 0.9.0 — nhưng nhãn vẫn
+    #   phải tăng, vì hai bản dự báo cùng nhãn mà khác cách tính sẽ làm trang Model
+    #   Performance mất tác dụng.
+    model_version: str = "xp-0.10.0"
 
     @property
     def cors_list(self) -> list[str]:

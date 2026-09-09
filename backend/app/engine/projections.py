@@ -23,15 +23,20 @@ from app.engine.team_strength import (
     load_promoted_map,
 )
 from app.engine import bonus as bonus_mod
+from app.engine import goal_adjust as goal_adj_mod
+from app.engine import opponent_profile as opp_mod
 from app.engine import penalties as pen_mod
+from app.engine import roles as roles_mod
 from app.engine.xmins import estimate_minutes
-from app.engine.xpoints import _poisson_ge_k, expected_points
+from app.engine.xpoints import _poisson_ge_k, _poisson_at_least_one, expected_points
 from app.models import (
     ExpectedMinutes,
     Fixture,
     Gameweek,
     Player,
+    PlayerFixtureGoals,
     PlayerGameweekStat,
+    PlayerGoalOdds,
     PlayerProjection,
     Team,
 )
@@ -251,10 +256,32 @@ def build_projections(
     start_gw = get_planning_start_gw(db)
     gws = [gw for gw in range(start_gw, start_gw + horizon) if gw <= 38]
 
+    # ---- nâng cấp thành phần ghi bàn: vai trò, điểm yếu theo trục, kèo cầu thủ --
+    # Cả ba nguồn đều TUỲ CHỌN. Thiếu nguồn nào thì phần tương ứng bằng 1.0 / None,
+    # và `xp_delta` bằng 0 — engine chạy đúng như trước khi có tính năng này.
+    role_table = roles_mod.load_roles(players, db=db)
+    weakness = opp_mod.build_weakness_table(
+        stats=stats,
+        role_table=role_table,
+        player_team={p.id: p.team_id for p in players},
+        team_attack_strength={t.id: ts.season_avg_gf(t.id) for t in teams},
+    )
+    goal_odds: dict[tuple[int, int], PlayerGoalOdds] = {}
+    if settings.odds_player_goals_enabled:
+        for row in db.scalars(
+            select(PlayerGoalOdds).where(PlayerGoalOdds.gameweek.in_(gws))
+        ).all():
+            goal_odds[(row.player_id, row.fixture_id)] = row
+
     # wipe & rebuild projections for this horizon (baseline không đụng vào DB)
     if persist:
         db.execute(delete(PlayerProjection).where(PlayerProjection.gameweek.in_(gws)))
         db.execute(delete(ExpectedMinutes).where(ExpectedMinutes.gameweek.in_(gws)))
+        # Cùng nhịp xoá–ghi-lại với `player_projections`: đó là thứ bảo đảm phần
+        # điều chỉnh KHÔNG cộng dồn khi làm mới nhiều lần trong cùng một vòng.
+        db.execute(
+            delete(PlayerFixtureGoals).where(PlayerFixtureGoals.gameweek.in_(gws))
+        )
 
     players_by_team: dict[int, list[Player]] = defaultdict(list)
     for p in players:
@@ -357,6 +384,68 @@ def build_projections(
             prior_xg90=prior_xg.get(p.id),
             prior_xa90=prior_xa.get(p.id),
         )
+
+    def _stale_reason(odds) -> str | None:
+        """Kèo quá cũ thì CHỈ hiển thị, không vào xP — và nói rõ là vì cũ.
+
+        Đội hình, chấn thương và giá đều đổi trong tuần; một giá lấy ba ngày trước
+        mô tả một trận đấu khác với trận sắp đá. Bỏ qua trong im lặng thì con số
+        trông vẫn "có kèo" nhưng lại là kèo của tuần trước.
+        """
+        if odds is None:
+            return None
+        got = odds.fetched_at
+        if got is None:
+            return None
+        if got.tzinfo is None:
+            got = got.replace(tzinfo=timezone.utc)
+        age_h = (now - got).total_seconds() / 3600.0
+        limit = settings.odds_player_goals_max_age_hours
+        if age_h <= limit:
+            return None
+        return (
+            f"Kèo lấy về {age_h:.0f} giờ trước, quá mốc {limit:.0f} giờ — chỉ hiển "
+            "thị tham khảo, không đưa vào xP"
+        )
+
+    def _goal_adjustment(p, est, bd, fixture_id: int, opp_id: int):
+        """Phần ghi bàn được thay cho MỘT cầu thủ trong MỘT trận.
+
+        Trả `None` khi không có gì để thay (cầu thủ không ra sân, hoặc cả ba nguồn
+        đều thiếu) — khi đó xP giữ nguyên từng chữ số và không có dòng nào được ghi.
+        """
+        odds = goal_odds.get((p.id, fixture_id))
+        assignment = role_table.get(p.id)
+        if (
+            odds is None
+            and not assignment.role
+        ):
+            return None
+        adj = goal_adj_mod.adjust_fixture_goals(
+            goal_points=RULES.goal_points.get(p.element_type, 4),
+            exp_goals_model=bd.components["exp_goals"],
+            exp_goals_penalty=bd.components["exp_pen_goals"],
+            p_start=est.p_start,
+            p_sub=est.p_sub,
+            xmins=est.xmins,
+            assignment=assignment,
+            weakness=weakness,
+            opponent_team_id=opp_id,
+            positional_enabled=settings.positional_adjustment_enabled,
+            market_prob=None if odds is None else odds.prob,
+            # Chỉ giá đã loại biên trong nội bộ từng nhà cái được phép vào xP. Một
+            # cửa Yes đơn lẻ là xác suất CÓ BIÊN, cao hơn thật.
+            market_devigged=bool(odds and odds.n_devigged > 0),
+            market_condition=(
+                odds.condition if odds and odds.condition else goal_adj_mod.gm.COND_UNKNOWN
+            ),
+            market_weight=settings.odds_player_goals_weight,
+            market_source=None if odds is None else odds.source_name,
+            market_n_bookmakers=None if odds is None else odds.n_bookmakers,
+            market_updated_at=None if odds is None else odds.market_updated_at,
+            market_blocked_reason=_stale_reason(odds),
+        )
+        return adj
 
     def _allocate_gw_bonus(gw_fx: dict) -> dict[tuple[int, int], float]:
         """Chia quỹ 6 điểm bonus của TỪNG TRẬN, trả về {(player_id, fixture_id): bonus}.
@@ -484,9 +573,76 @@ def build_projections(
                         bonus_by_player_fixture.get((p.id, fixture_id)),
                         goal_scales.get((team.id, fixture_id), 1.0),
                     )
+                    # Thay thành phần ghi bàn (và CHỈ thành phần đó) theo điểm yếu
+                    # vị trí + kèo ghi bàn. None = không có nguồn nào -> xP y như cũ.
+                    g_adj = _goal_adjustment(p, est, bd, fixture_id, opp_id)
+                    if g_adj is not None and persist:
+                        db.add(PlayerFixtureGoals(
+                            player_id=p.id, fixture_id=fixture_id, gameweek=gw,
+                            element_type=p.element_type, opponent_team=opp_id,
+                            was_home=is_home,
+                            tactical_role=g_adj.tactical_role,
+                            role_source=g_adj.role_source,
+                            role_confidence=g_adj.role_confidence,
+                            p_start=round(est.p_start, 4),
+                            p_sub=round(est.p_sub, 4),
+                            minutes_if_start=(
+                                None if g_adj.minutes_if_start is None
+                                else round(g_adj.minutes_if_start, 1)
+                            ),
+                            minutes_if_sub=(
+                                None if g_adj.minutes_if_sub is None
+                                else round(g_adj.minutes_if_sub, 1)
+                            ),
+                            xmins=round(est.xmins, 1),
+                            exp_goals_model=round(g_adj.exp_goals_model, 5),
+                            exp_goals_open=round(g_adj.exp_goals_open, 5),
+                            exp_goals_penalty=round(g_adj.exp_goals_penalty, 5),
+                            # Bóng chết ngoài 11m: FPL không phát số tách riêng ->
+                            # NULL, không phải 0.
+                            exp_goals_set_piece=None,
+                            exp_goals_adjusted=round(g_adj.exp_goals_adjusted, 5),
+                            exp_goals_final=round(g_adj.exp_goals_final, 5),
+                            market_prob=g_adj.market_prob,
+                            market_exp_goals=(
+                                None if g_adj.market_exp_goals is None
+                                else round(g_adj.market_exp_goals, 5)
+                            ),
+                            market_r90=(
+                                None if g_adj.market_r90 is None
+                                else round(g_adj.market_r90, 5)
+                            ),
+                            market_condition=g_adj.market_condition,
+                            market_usable=g_adj.market_usable,
+                            market_weight=g_adj.market_weight,
+                            market_source=g_adj.market_source,
+                            market_n_bookmakers=g_adj.market_n_bookmakers,
+                            market_updated_at=g_adj.market_updated_at,
+                            market_note=g_adj.market_note,
+                            weakness_axis=g_adj.weakness_axis,
+                            axis_factor=g_adj.axis_factor,
+                            position_factor=round(g_adj.position_factor, 5),
+                            finishing_share=g_adj.finishing_share,
+                            weakness_sample_90s=g_adj.weakness_sample_90s,
+                            weakness_reliability=g_adj.weakness_reliability,
+                            weakness_note=g_adj.weakness_note,
+                            goal_points=g_adj.goal_points,
+                            # Cùng độ chính xác với `PlayerProjection.xp` (3 chữ số
+                            # thập phân). Lưu mịn hơn thì tổng theo trận và tổng theo
+                            # vòng làm tròn khác nhau, và giao diện hiện hai con số
+                            # lệch nhau 0.01 cho CÙNG một cầu thủ.
+                            xp_before=round(bd.xp, 3),
+                            xp_after=round(bd.xp + g_adj.xp_delta, 3),
+                            xp_delta=round(g_adj.xp_delta, 3),
+                            model_version=settings.model_version,
+                            data_cutoff=now,
+                        ))
                     # stash analytic breakdown on the player object for this fixture
                     p._acc = getattr(p, "_acc", None) or _Acc()
-                    p._acc.add(est, bd, opp_id, is_home, fixture_id, lam_against)
+                    p._acc.add(
+                        est, bd, opp_id, is_home, fixture_id, lam_against,
+                        goal_adj=g_adj,
+                    )
 
                     if run_mc and est.xmins > 3:
                         share_goal = (
@@ -649,12 +805,15 @@ class _Acc:
         self.cs_prob = 0.0
         self.goal_prob = 0.0
         self.assist_prob = 0.0
+        # Tổng phần xP do thay thành phần ghi bàn, CỘNG QUA TỪNG TRẬN. Vòng đôi là
+        # hai trận nên hai lần điều chỉnh; vòng trắng không có trận nào nên bằng 0.
+        self.xp_goal_delta = 0.0
         self.first_est = None
         self.fixture_id = None
         self.opponent_id = None
         self.is_home = None
 
-    def add(self, est, bd, opp_id, is_home, fixture_id, lam_against) -> None:
+    def add(self, est, bd, opp_id, is_home, fixture_id, lam_against, goal_adj=None) -> None:
         if self.n == 0:
             self.first_est = est
             self.fixture_id = fixture_id
@@ -673,5 +832,16 @@ class _Acc:
         self.xp_negative += bd.negative
         # probabilities: combine across fixtures (at least one)
         self.cs_prob = max(self.cs_prob, bd.clean_sheet_prob)
-        self.goal_prob = 1 - (1 - self.goal_prob) * (1 - bd.goal_prob)
+        # Xác suất ghi bàn của trận này phải đọc từ số bàn kỳ vọng ĐÃ ĐIỀU CHỈNH —
+        # nếu không thì cột xP và cột "xác suất ghi bàn" cạnh nhau sẽ nói hai chuyện
+        # khác nhau về cùng một cầu thủ.
+        goal_prob_fx = bd.goal_prob
+        if goal_adj is not None:
+            # xP_mới = xP_cũ + (bàn_mới − bàn_cũ) × điểm_mỗi_bàn. Đây là CHỖ DUY
+            # NHẤT phép cộng đó xảy ra, và nó chỉ chạm vào thành phần bàn thắng.
+            self.xp += goal_adj.xp_delta
+            self.xp_goals += goal_adj.xp_delta
+            self.xp_goal_delta += goal_adj.xp_delta
+            goal_prob_fx = _poisson_at_least_one(goal_adj.exp_goals_final)
+        self.goal_prob = 1 - (1 - self.goal_prob) * (1 - goal_prob_fx)
         self.assist_prob = 1 - (1 - self.assist_prob) * (1 - bd.assist_prob)

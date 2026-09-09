@@ -775,6 +775,295 @@ def sync_odds(db: Session) -> dict:
 ODDS_URL = "https://the-odds-api.com/"
 
 
+# ----------------------------------- vai trò chiến thuật (nguồn ngoài) --------
+def sync_player_roles(db: Session) -> dict:
+    """Nạp vai trò chiến thuật từ API công khai của Premier League.
+
+    Bật/tắt bằng `PL_POSITIONS_ENABLED` (hiện BẬT). robots.txt của
+    premierleague.com cho phép crawl; Điều khoản sử dụng giới hạn ở "private and
+    personal use" nên `source_name` được ghi xuống từng hàng để phần ghi nguồn đi
+    kèm dữ liệu chứ không nằm rời ở một chỗ nào đó có thể quên.
+
+    Khớp tên được giới hạn **trong chính CLB** mà nguồn báo, vì toàn giải có nhiều
+    cặp họ trùng nhau và gán vai trò cho nhầm người là lỗi âm thầm: không có thông
+    báo nào, chỉ có hai cầu thủ cùng bị tính sai.
+    """
+    from app.models import PlayerRole
+    from app.providers.pl_positions import (
+        SOURCE_NAME,
+        SOURCE_URL,
+        fetch_roles,
+        get_pl_positions_provider,
+    )
+    from app.providers.player_goals import match_player_id
+    from app.providers.probability import normalise_team
+
+    provider = get_pl_positions_provider()
+    if provider is None:
+        _log(db, SOURCE_NAME, SOURCE_URL, "ok", 0,
+             "PL_POSITIONS_ENABLED=false — vai trò chiến thuật giữ nguyên nguồn "
+             "khai tay (nếu có); hệ số điều chỉnh theo vị trí bằng 1.0.", "official")
+        db.commit()
+        return {"enabled": False, "roles": 0}
+
+    report = fetch_roles(provider)
+    if not report.records:
+        _log(db, SOURCE_NAME, SOURCE_URL, "error", 0,
+             report.detail or "Không lấy được dữ liệu", "official")
+        db.commit()
+        return {"enabled": True, "roles": 0, "errors": report.errors}
+
+    players = db.scalars(select(Player)).all()
+    teams = {t.id: t.name for t in db.scalars(select(Team)).all()}
+    by_norm_team: dict[str, list] = defaultdict(list)
+    for pl in players:
+        by_norm_team[normalise_team(teams.get(pl.team_id, ""))].append(pl)
+
+    now = datetime.now(timezone.utc)
+    existing = {r.player_id: r for r in db.scalars(select(PlayerRole)).all()}
+    seen: set[int] = set()
+    written = unmatched = ambiguous = rejected = 0
+
+    for rec in report.records:
+        candidates = by_norm_team.get(normalise_team(rec.club_name), [])
+        if not candidates:
+            # CLB của nguồn không khớp CLB nào của FPL (tên viết khác, hoặc đội mới)
+            unmatched += 1
+            continue
+        pid = match_player_id(rec.display_name, candidates)
+        if pid is None:
+            unmatched += 1
+            continue
+        if pid in seen:
+            # Hai bản ghi cùng trỏ về một cầu thủ FPL -> không biết cái nào đúng.
+            continue
+        player = next((x for x in candidates if x.id == pid), None)
+        role = rec.role
+        if role and player is not None:
+            from app.engine.roles import is_plausible
+
+            if not is_plausible(role, player.element_type):
+                # Vai trò mâu thuẫn với vị trí FPL (thủ môn thành tiền đạo) -> bác,
+                # nhưng vẫn ghi hàng với role=None để giao diện giải thích được.
+                rejected += 1
+                rec = replace_role(rec, None, (
+                    f"Nguồn nói “{rec.raw_label}” nhưng FPL xếp cầu thủ này ở vị trí "
+                    "khác — bác bỏ thay vì tin một trong hai"
+                ))
+                role = None
+        seen.add(pid)
+        values = dict(
+            role=role, raw_label=rec.raw_label, reason=rec.reason or None,
+            source_name=SOURCE_NAME, source_url=SOURCE_URL,
+            external_name=rec.display_name, external_club=rec.club_name,
+            season_label=report.season_label, fetched_at=now,
+        )
+        row = existing.get(pid)
+        if row is not None:
+            # Khoá duy nhất là `player_id`, không phải khoá chính -> `db.merge()` sẽ
+            # luôn INSERT và vi phạm ràng buộc ở lần chạy thứ hai.
+            for k, v in values.items():
+                setattr(row, k, v)
+        else:
+            db.add(PlayerRole(player_id=pid, **values))
+        if role:
+            written += 1
+
+    # Đếm trên TOÀN BỘ bản ghi của nguồn, không phải trên nhóm đã khớp — đây là
+    # thông tin về chất lượng NGUỒN ("nguồn nói không đủ rõ bao nhiêu lần"), khác
+    # với `unmatched` vốn là vấn đề khớp tên của phía ta.
+    ambiguous = sum(1 for r in report.records if not r.role)
+    detail = (
+        f"{report.detail} · khớp FPL {len(seen)}, ghi {written} vai trò dùng được"
+        f" · nguồn có {ambiguous} nhãn không quy được về một vai trò"
+        " (để trống, không đoán)"
+        f" · {unmatched} tên không khớp cầu thủ FPL nào trong CLB đó"
+        + (f" · {rejected} bị bác vì mâu thuẫn vị trí FPL" if rejected else "")
+    )
+    _log(db, SOURCE_NAME, SOURCE_URL, "ok" if written else "error", written,
+         detail, "official")
+    db.commit()
+    return {
+        "enabled": True, "roles": written, "matched": len(seen),
+        "ambiguous": ambiguous, "unmatched": unmatched, "rejected": rejected,
+        "season": report.season_label,
+    }
+
+
+def replace_role(rec, role, reason):
+    """Bản sao của bản ghi vai trò với `role`/`reason` mới (dataclass bất biến hoá)."""
+    from dataclasses import replace as _replace
+
+    return _replace(rec, role=role, reason=reason)
+PLAYER_ODDS_DOCS = "https://the-odds-api.com/sports-odds-data/betting-markets.html"
+
+
+# --------------------------------- kèo ghi bàn theo cầu thủ (Tier-2) ----------
+def sync_player_goal_odds(db: Session, start_gw: int | None = None) -> dict:
+    """Lấy `player_goal_scorer_anytime` cho các trận của vòng sắp tới.
+
+    Khác `sync_odds` ở chi phí: kèo cầu thủ chỉ lấy được **mỗi lần một trận**, nên
+    1 credit/trận (~10 credit mỗi lượt) thay vì 3 credit cho cả vòng. Vì thế bước
+    này có **ngân sách**: giới hạn số trận, chỉ gọi lại sau
+    `ODDS_PLAYER_GOALS_MIN_REFRESH_HOURS`, và dừng khi quota chạm mức dự trữ để
+    phần kèo đội (ảnh hưởng λ của mọi cầu thủ) luôn được ưu tiên.
+
+    Không có key / tắt tính năng / hết quota / nhà cái chưa ra kèo đều cho cùng một
+    kết quả: không ghi gì, engine chạy y như trước.
+    """
+    from datetime import timedelta
+
+    from app.engine import goal_market
+    from app.models import PlayerGoalOdds
+    from app.providers.player_goals import (
+        fetch_player_goal_markets,
+        get_player_goals_provider,
+        match_player_id,
+    )
+    from app.providers.probability import normalise_team
+    from app.services.common import planning_start_gw
+
+    provider = get_player_goals_provider()
+    if provider is None:
+        reason = (
+            "Chưa cấu hình ODDS_API_KEY"
+            if not settings.odds_api_key
+            else "ODDS_PLAYER_GOALS_ENABLED=false"
+        )
+        _log(db, "Odds API - kèo ghi bàn cầu thủ", PLAYER_ODDS_DOCS, "ok", 0,
+             f"{reason} — thành phần ghi bàn giữ nguyên mô hình nội bộ.", "market")
+        db.commit()
+        return {"enabled": False, "players": 0, "fixtures": 0, "reason": reason}
+
+    gw = start_gw or planning_start_gw(db)
+    fixtures = db.scalars(
+        select(Fixture).where(Fixture.event == gw, not_played_condition())
+    ).all()
+    if not fixtures:
+        _log(db, "Odds API - kèo ghi bàn cầu thủ", PLAYER_ODDS_DOCS, "ok", 0,
+             f"Vòng {gw} không có trận chưa đá — không gọi API.", "market")
+        db.commit()
+        return {"enabled": True, "players": 0, "fixtures": 0}
+
+    teams = {t.id: t.name for t in db.scalars(select(Team)).all()}
+    players = db.scalars(select(Player)).all()
+    by_team: dict[int, list] = defaultdict(list)
+    for pl in players:
+        by_team[pl.team_id].append(pl)
+
+    wanted: dict[tuple[str, str], Fixture] = {}
+    for f in fixtures:
+        key = (
+            normalise_team(teams.get(f.team_h, "")),
+            normalise_team(teams.get(f.team_a, "")),
+        )
+        if key[0] and key[1]:
+            wanted[key] = f
+
+    # Trận nào còn mới thì KHÔNG gọi lại — đây là toàn bộ lý do lịch 6 tiếng không
+    # nuốt hết quota tháng.
+    cutoff = datetime.now(timezone.utc) - timedelta(
+        hours=settings.odds_player_goals_min_refresh_hours
+    )
+    latest: dict[int, datetime] = {}
+    for row in db.scalars(
+        select(PlayerGoalOdds).where(PlayerGoalOdds.gameweek == gw)
+    ).all():
+        got = row.fetched_at
+        if got is None:
+            continue
+        if got.tzinfo is None:
+            got = got.replace(tzinfo=timezone.utc)
+        if row.fixture_id not in latest or got > latest[row.fixture_id]:
+            latest[row.fixture_id] = got
+    fresh = {
+        key: (latest.get(fx.id) is not None and latest[fx.id] > cutoff)
+        for key, fx in wanted.items()
+    }
+
+    report = fetch_player_goal_markets(provider, wanted=wanted, fresh_until=fresh)
+
+    written = unmatched = 0
+    touched_fixtures = 0
+    for ev in report.events:
+        key = (normalise_team(ev.home_name), normalise_team(ev.away_name))
+        fx = wanted.get(key)
+        if fx is None or not ev.quotes:
+            continue
+        candidates = by_team.get(fx.team_h, []) + by_team.get(fx.team_a, [])
+
+        # Gom giá theo cầu thủ: mỗi nhà cái một giá, đồng thuận bằng TRUNG VỊ, và
+        # **không** chuẩn hoá giữa các cầu thủ (nhiều người cùng ghi bàn được).
+        grouped: dict[int, list] = defaultdict(list)
+        for q in ev.quotes:
+            pid = match_player_id(q.player_name, candidates)
+            if pid is None:
+                unmatched += 1
+                continue
+            grouped[pid].append(q)
+        if not grouped:
+            continue
+
+        # Ghi lại cả trận: xoá trước rồi chèn, để cầu thủ mà nhà cái đã RÚT kèo
+        # không còn nằm lại với giá cũ (dữ liệu cũ sống lâu hơn code).
+        db.execute(delete(PlayerGoalOdds).where(PlayerGoalOdds.fixture_id == fx.id))
+        touched_fixtures += 1
+        now = datetime.now(timezone.utc)
+        for pid, quotes in grouped.items():
+            devigged = [q.prob for q in quotes if q.devigged and q.prob is not None]
+            all_probs = [q.prob for q in quotes if q.prob is not None]
+            prob = goal_market.consensus_probability(devigged)
+            prob_raw = goal_market.consensus_probability(all_probs)
+            updates = [q.last_update for q in quotes if q.last_update]
+            db.add(PlayerGoalOdds(
+                fixture_id=fx.id, player_id=pid, gameweek=fx.event,
+                # prob = 0 khi chưa có giá nào loại biên được; `n_devigged` là thứ
+                # phía engine đọc để biết có được dùng cho xP hay không.
+                prob=round(prob or 0.0, 5),
+                prob_raw=None if prob_raw is None else round(prob_raw, 5),
+                n_bookmakers=len(quotes),
+                n_devigged=len(devigged),
+                best_price_yes=max(
+                    (q.price_yes for q in quotes if q.price_yes), default=None
+                ),
+                best_price_no=max(
+                    (q.price_no for q in quotes if q.price_no), default=None
+                ),
+                condition=settings.odds_player_goals_condition,
+                source_name="odds_api",
+                bookmaker_names=", ".join(sorted({q.bookmaker for q in quotes}))[:256],
+                market_updated_at=max(updates) if updates else None,
+                fetched_at=now,
+            ))
+            written += 1
+
+    detail = report.detail
+    if unmatched:
+        detail += f" · {unmatched} tên cầu thủ không khớp FPL (bỏ qua, không đoán)"
+    if settings.odds_player_goals_condition == goal_market.COND_UNKNOWN:
+        detail += (
+            " · ĐIỀU KIỆN ÁP DỤNG chưa xác minh -> kèo chỉ hiển thị tham khảo, "
+            "KHÔNG vào xP (đặt ODDS_PLAYER_GOALS_CONDITION)"
+        )
+    for err in report.errors[:3]:
+        detail += f" · lỗi: {err}"
+    _log(db, "Odds API - kèo ghi bàn cầu thủ", PLAYER_ODDS_DOCS,
+         "ok" if written or report.skipped_fresh else "error", written, detail,
+         "market")
+    db.commit()
+    return {
+        "enabled": True,
+        "players": written,
+        "fixtures": touched_fixtures,
+        "unmatched": unmatched,
+        "credits_used": report.credits_used,
+        "requests_remaining": report.requests_remaining,
+        "skipped_fresh": report.skipped_fresh,
+        "skipped_budget": report.skipped_budget,
+        "condition": settings.odds_player_goals_condition,
+    }
+
+
 # ------------------------------------- Championship (đội mới lên hạng) --------
 def sync_championship(db: Session) -> dict:
     """Lấy bảng Championship mùa trước cho các đội vừa lên hạng (tuỳ chọn).
@@ -891,7 +1180,13 @@ def run_full_sync(db: Session, build_proj: bool = True,
     from app.services.expert_scoring import score_finished_gameweeks
 
     result["expert_scoring"] = score_finished_gameweeks(db)
+    # Vai trò chiến thuật: phải nằm TRƯỚC build_projections vì engine đọc bảng
+    # `player_roles` để ghép cầu thủ với trục điểm yếu của đối thủ.
+    result["player_roles"] = sync_player_roles(db)
     result["odds"] = sync_odds(db)
+    # Phải nằm TRƯỚC build_projections: engine đọc `player_goal_odds` khi tính lại
+    # thành phần ghi bàn của từng trận.
+    result["player_goal_odds"] = sync_player_goal_odds(db)
     result["championship"] = sync_championship(db)
     if build_proj:
         from app.engine.projections import build_projections

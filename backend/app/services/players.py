@@ -161,6 +161,12 @@ def list_players(db: Session, position: str | None = None, team_id: int | None =
     proj_next = projections_for_gw(db, start)
     xp3 = horizon_xp(db, gws[:3])
     xp5 = horizon_xp(db, gws[:5])
+    # Phần xP(1) đến từ việc thay thành phần ghi bàn (điểm yếu vị trí + kèo ghi
+    # bàn). 0.0 nghĩa là không có điều chỉnh nào — cột xP(1) vẫn là xP đầy đủ, đây
+    # chỉ là dấu cho biết có gì đáng mở ra xem.
+    from app.services.xp_detail import goal_delta_by_player
+
+    goal_delta = goal_delta_by_player(db, start)
 
     q = select(Player)
     if position:
@@ -181,6 +187,7 @@ def list_players(db: Session, position: str | None = None, team_id: int | None =
             **base,
             **_proj_public(proj),
             "xp_next": round(proj.xp, 2) if proj else 0.0,
+            "xp_next_goal_delta": goal_delta.get(p.id, 0.0),
             "xp_next3": round(xp3.get(p.id, 0.0), 2),
             "xp_next5": round(xp5.get(p.id, 0.0), 2),
             "value_next5": round(xp5.get(p.id, 0.0) / max(base["price"], 0.1), 2),
