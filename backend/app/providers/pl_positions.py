@@ -152,6 +152,28 @@ def parse_position_info(label: str | None) -> ParsedRole:
     )
 
 
+# Độ dài tối đa của `player_roles.season_label`. Ghi ra đây vì Postgres SIẾT
+# `varchar(n)` còn SQLite thì bỏ qua — nghĩa là một nhãn quá dài chạy ngon trên máy
+# và làm hỏng job đồng bộ trên Neon, đúng như đã xảy ra: nhãn thật của API là
+# "English Premier League Season 2026/2027" (39 ký tự) và cột chỉ có 32.
+SEASON_LABEL_MAX = 32
+
+
+def season_label(raw: str | None) -> str | None:
+    """Rút nhãn mùa của API về dạng ngắn, đúng quy ước dự án: `2026/27`.
+
+    Tên giải trong nhãn là thừa (module này chỉ hỏi Ngoại hạng), và bỏ nó đi vừa cho
+    dữ liệu gọn hơn vừa loại luôn khả năng tràn cột. Không rút được thì cắt cứng —
+    một nhãn xấu vẫn tốt hơn một job đồng bộ chết.
+    """
+    if not raw:
+        return None
+    m = re.search(r"(\d{4})\s*/\s*(\d{2,4})", raw)
+    if m:
+        return f"{m.group(1)}/{m.group(2)[-2:]}"
+    return raw.strip()[:SEASON_LABEL_MAX]
+
+
 # ------------------------------------------------------------- provider ------
 @dataclass
 class PlayerRoleRecord:
@@ -206,10 +228,11 @@ class PLPositionsProvider:
         if not content:
             return None, None
         top = content[0]
+        label = season_label(top.get("label"))
         try:
-            return int(float(top.get("id"))), top.get("label")
+            return int(float(top.get("id"))), label
         except (TypeError, ValueError):
-            return None, top.get("label")
+            return None, label
 
     def clubs(self, season_id: int) -> set[str]:
         """Tên 20 CLB đang đá Ngoại hạng ở mùa này.

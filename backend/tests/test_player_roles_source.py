@@ -362,3 +362,73 @@ def test_engine_writes_the_role_onto_each_fixture_row(db, monkeypatch):
         _clear_roles(db)
         db.expire_all()
         build_projections(db, horizon=2, mc_iterations=300)
+
+
+# ============================ Postgres siết varchar, SQLite thì không =========
+# Lỗi thật 2026-09-10: `season_label` của API dài 39 ký tự, cột khai varchar(32).
+# SQLite (dev + test) nuốt gọn, Postgres (Neon) từ chối -> job đồng bộ hỏng 4 lần
+# liên tiếp, mỗi lần một email. Cả test suite lúc đó vẫn xanh, nên bài học là:
+# test chạy trên SQLite KHÔNG bao giờ tự bắt được lớp lỗi này. Phải khẳng định độ
+# dài một cách tường minh.
+def test_season_label_is_shortened_to_project_convention():
+    assert plp.season_label("English Premier League Season 2026/2027") == "2026/27"
+    assert plp.season_label("2025/26") == "2025/26"
+    assert plp.season_label("English Premier League Season 2003/2004") == "2003/04"
+    assert plp.season_label(None) is None
+
+
+def test_season_label_always_fits_the_column():
+    """Nhãn lạ không rút được vẫn phải vừa cột — thà xấu còn hơn giết job sync."""
+    from app.models import PlayerRole
+
+    limit = PlayerRole.season_label.type.length
+    weird = "Some Extremely Long Competition Name Without Any Year In It At All"
+    out = plp.season_label(weird)
+    assert len(out) <= limit
+    assert len(plp.season_label("English Premier League Season 2026/2027")) <= limit
+
+
+def test_sync_never_writes_a_string_longer_than_its_column(db, monkeypatch):
+    """Nguồn ngoài trả chuỗi dài vô lý -> vẫn không hàng nào tràn cột.
+
+    Đây là test đứng thay cho Postgres: nó khẳng định điều mà SQLite không bao giờ
+    ép, nên nó bắt được đúng lớp lỗi đã làm hỏng cron.
+    """
+    from app.config import settings
+    from app.ingestion.fpl_sync import sync_player_roles
+    from app.models import Player, PlayerRole, Team
+
+    players = db.scalars(select(Player)).all()
+    team = db.get(Team, players[0].team_id)
+    victim = next(p for p in players if p.team_id == team.id and p.element_type == 3)
+
+    long_club = team.name          # phải khớp CLB thật thì mới ghép được cầu thủ
+    prov = _FakeProvider(
+        players=[{
+            "name": {"display": f"{victim.first_name} {victim.second_name}"},
+            "currentTeam": {"name": long_club},
+            "info": {"positionInfo": "Right Winger"},
+        }],
+        clubs={long_club},
+        season=(841, "X" * 500),   # nhãn mùa dài vô lý
+    )
+    monkeypatch.setattr(plp, "get_pl_positions_provider", lambda: prov)
+    monkeypatch.setattr(settings, "pl_positions_enabled", True)
+
+    try:
+        db.execute(PlayerRole.__table__.delete())
+        db.commit()
+        sync_player_roles(db)
+        rows = db.scalars(select(PlayerRole)).all()
+        assert rows, "phải ghi được ít nhất một hàng"
+        for r in rows:
+            for col in PlayerRole.__table__.columns:
+                limit = getattr(col.type, "length", None)
+                val = getattr(r, col.name)
+                if limit and isinstance(val, str):
+                    assert len(val) <= limit, (
+                        f"{col.name}: {len(val)} ký tự > varchar({limit})"
+                    )
+    finally:
+        db.execute(PlayerRole.__table__.delete())
+        db.commit()

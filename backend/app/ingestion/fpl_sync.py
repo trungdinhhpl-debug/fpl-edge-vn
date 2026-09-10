@@ -776,6 +776,19 @@ ODDS_URL = "https://the-odds-api.com/"
 
 
 # ----------------------------------- vai trò chiến thuật (nguồn ngoài) --------
+def _fit(value: str | None, column) -> str | None:
+    """Cắt chuỗi cho vừa `varchar(n)` của cột đã khai. `None` vào thì `None` ra.
+
+    Tồn tại vì hai cơ sở dữ liệu của dự án cư xử khác nhau: **Postgres từ chối chuỗi
+    dài hơn cột, SQLite thì âm thầm chấp nhận**. Nghĩa là mọi lỗi loại này đều đi qua
+    được test và môi trường dev, rồi mới nổ ở Neon — chỗ khó xem log nhất.
+    """
+    if value is None:
+        return None
+    limit = getattr(column.type, "length", None)
+    return value if not limit else value[:limit]
+
+
 def sync_player_roles(db: Session) -> dict:
     """Nạp vai trò chiến thuật từ API công khai của Premier League.
 
@@ -852,11 +865,21 @@ def sync_player_roles(db: Session) -> dict:
                 ))
                 role = None
         seen.add(pid)
+        # Cắt theo ĐÚNG độ dài cột đã khai. Postgres siết `varchar(n)` còn SQLite bỏ
+        # qua, nên một chuỗi dài quá từ nguồn ngoài sẽ chạy ngon trên máy và giết job
+        # đồng bộ trên Neon — đã xảy ra thật với `season_label` (39 ký tự / cột 32),
+        # làm hỏng 4 lần chạy liên tiếp. Không tin độ dài của bất cứ thứ gì lấy từ
+        # bên ngoài; ràng buộc phải nằm ngay tại chỗ ghi.
         values = dict(
-            role=role, raw_label=rec.raw_label, reason=rec.reason or None,
-            source_name=SOURCE_NAME, source_url=SOURCE_URL,
-            external_name=rec.display_name, external_club=rec.club_name,
-            season_label=report.season_label, fetched_at=now,
+            role=role,
+            raw_label=_fit(rec.raw_label, PlayerRole.raw_label),
+            reason=rec.reason or None,
+            source_name=_fit(SOURCE_NAME, PlayerRole.source_name),
+            source_url=_fit(SOURCE_URL, PlayerRole.source_url),
+            external_name=_fit(rec.display_name, PlayerRole.external_name),
+            external_club=_fit(rec.club_name, PlayerRole.external_club),
+            season_label=_fit(report.season_label, PlayerRole.season_label),
+            fetched_at=now,
         )
         row = existing.get(pid)
         if row is not None:
