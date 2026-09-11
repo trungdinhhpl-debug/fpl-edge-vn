@@ -48,6 +48,11 @@ export default function PlayersPage() {
   const [sort, setSort] = useState<SortKey>("xp_next5");
   const [dir, setDir] = useState<SortDir>("desc");
   const [showAll, setShowAll] = useState(false);
+  // Cầu thủ đã chuyển đi (Watkins sang Al Hilal, Elliott sang Valencia…) vẫn nằm
+  // trong dữ liệu FPL với đủ giá và tỷ lệ sở hữu. Mặc định ẩn — bạn không mua
+  // được họ — nhưng CÓ nút để mở ra, vì một bảng tự cắt bớt mà không nói là một
+  // bảng nói dối.
+  const [showDeparted, setShowDeparted] = useState(false);
   // Cầu thủ đang mở bảng chi tiết xP(1). Một dòng mỗi lúc: mở dòng khác thì dòng
   // cũ đóng lại, nên bảng không bị đẩy dài ra vì người đọc quên đóng.
   const [openXp, setOpenXp] = useState<number | null>(null);
@@ -56,7 +61,8 @@ export default function PlayersPage() {
     `/api/players?limit=1000` +
     (pos ? `&position=${pos}` : "") +
     (maxPrice ? `&max_price=${maxPrice}` : "") +
-    (teamId ? `&team_id=${teamId}` : "");
+    (teamId ? `&team_id=${teamId}` : "") +
+    (showDeparted ? `&include_departed=1` : "");
   const { data, loading, error, reload } = useApi<any>(query);
   const { data: teamData } = useApi<any>("/api/teams");
 
@@ -176,6 +182,17 @@ export default function PlayersPage() {
             {showAll ? `Chỉ hiện ${PAGE_SIZE} đầu` : `Hiện tất cả ${rows.length}`}
           </button>
         )}
+        {!loading && (data?.departed_count ?? 0) > 0 && (
+          <button
+            type="button"
+            onClick={() => setShowDeparted((s) => !s)}
+            className="rounded-md border px-2 py-0.5 transition hover:bg-muted"
+          >
+            {showDeparted
+              ? `Ẩn lại ${data.departed_count} cầu thủ đã rời CLB`
+              : `Đang ẩn ${data.departed_count} cầu thủ đã rời CLB — hiện`}
+          </button>
+        )}
         {(q || pos || maxPrice || teamId) && (
           <button
             type="button"
@@ -227,9 +244,15 @@ export default function PlayersPage() {
                         <div className="flex items-center gap-1.5 font-medium">
                           {p.name}
                           <StatusDot status={p.status} />
+                          {p.departed && (
+                            <Badge className="bg-danger/15 text-danger">ĐÃ RỜI</Badge>
+                          )}
                           {p.penalties_order === 1 && <Badge className="bg-primary/15 text-primary">PEN</Badge>}
                         </div>
-                        <div className="text-xs text-muted-foreground">{p.team}</div>
+                        <div className="text-xs text-muted-foreground">
+                          {p.team}
+                          {p.departed && p.news ? ` · ${p.news}` : ""}
+                        </div>
                       </td>
                       <td className="p-2 text-center"><PosTag pos={p.position} /></td>
                       <td className="p-2 text-right tabular-nums">£{fmt(p.price)}</td>

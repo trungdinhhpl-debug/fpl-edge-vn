@@ -16,6 +16,7 @@ from app.models import (
     Team,
 )
 from app.scoring import position_name
+from app.services.departures import player_departed
 
 
 def iso_utc(dt) -> str | None:
@@ -126,6 +127,10 @@ def player_public(p: Player, team: Team | None) -> dict:
         "price": round(p.now_cost / 10.0, 1),
         "selected_by_percent": p.selected_by_percent,
         "status": p.status,
+        # Đã rời CLB là một trạng thái KHÁC với "không sẵn sàng": người chấn
+        # thương sẽ trở lại, người đã sang Al Hilal thì không. Gắn ngay ở đây để
+        # mọi phản hồi có cầu thủ đều phân biệt được, không phải đoán qua `news`.
+        "departed": player_departed(p),
         "chance_of_playing": p.chance_of_playing_next_round,
         "news": p.news,
         "total_points": p.total_points,

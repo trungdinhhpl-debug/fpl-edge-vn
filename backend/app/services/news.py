@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.models import InjuryReport, Player
 from app.services.common import player_public, team_lookup, iso_utc
+from app.services.departures import player_departed
 from app.services.news_tiers import (
     BY_KEY, TIERS, classify_origin, recommend, xmins_before_after,
 )
@@ -92,6 +93,14 @@ def news_feed(db: Session, impact: str | None = None, tier: str | None = None,
             continue
         p = players.get(r.player_id)
         if not p:
+            continue
+        # "Has joined Bolton Wanderers on loan" không phải tin chấn thương và
+        # không có hành động nào để khuyên: người này đã rời giải. Đo 2026-09-11,
+        # 60/100 tin đầu của feed là tin kiểu này — chúng đẩy tin thật ra ngoài.
+        # Lọc theo trạng thái HIỆN TẠI của cầu thủ chứ không theo bản tin: một
+        # người từng chấn thương rồi mới chuyển đi vẫn còn bản tin chấn thương cũ
+        # là bản mới nhất, và bản tin đó cũng đã hết nghĩa.
+        if player_departed(p):
             continue
         tier_key = classify_origin(r.source_name)
         if tier and tier_key != tier:

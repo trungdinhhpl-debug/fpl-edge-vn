@@ -20,6 +20,7 @@ from app.optimizer import (
 )
 from app.models import Player, PlayerProjection
 from app.services.decision_tree import build_decision_tree
+from app.services.departures import player_departed
 from app.services.field import field_eo, tilt
 from app.services.common import (
     horizon_xp,
@@ -46,6 +47,12 @@ def build_opt_players(db: Session, gw: int, mode: str = "max_ep",
     eo = eo or {}
     out = []
     for pid, p in players.items():
+        # Người đã rời CLB có xP = 0 nhưng vẫn còn GIÁ, nên với MILP họ là một
+        # ghế dự bị £4.0 hoàn hảo: không mất gì ở hàm mục tiêu mà giải phóng
+        # tiền cho đội hình chính. Giải pháp đó không tồn tại ngoài đời — FPL
+        # không cho mua họ — nên họ không được có mặt trong pool.
+        if player_departed(p):
+            continue
         pr = projs.get(pid)
         xp = pr.xp if pr else 0.0
         ceiling = pr.mc_ceiling if pr else 0.0
@@ -77,6 +84,11 @@ def _shortlist(db: Session, gws: list[int], current_squad: set[int],
     hx = horizon_xp(db, gws)
     by_pos: dict[int, list[int]] = defaultdict(list)
     for pid, p in players.items():
+        # Không chào bán người đã rời CLB. Nhưng nếu họ ĐANG ở trong đội của
+        # người dùng thì phải giữ lại: đó chính là món hàng cần được khuyên bán,
+        # và bỏ họ khỏi pool sẽ làm optimizer coi như đội chỉ có 14 người.
+        if player_departed(p) and pid not in current_squad:
+            continue
         by_pos[p.element_type].append(pid)
     keep: set[int] = set(current_squad)
     for t, pool in by_pos.items():
@@ -309,6 +321,8 @@ def optimize_wildcard(db: Session, budget: int = 1000, horizon: int = 6,
 
     opt_players = []
     for pid, p in players.items():
+        if player_departed(p):
+            continue          # cùng lý do như trong build_opt_players
         v = vals.get(pid, {}).get("value", 0.0)
         # Băng đội trưởng nhân đôi điểm của MỘT vòng, không phải của cả horizon.
         # Bản cũ đặt cap_value = giá trị horizon + ceiling, tức người được chọn
@@ -531,7 +545,14 @@ def analyze_team(db: Session, squad_ids: list[int], bank: int = 0) -> dict:
     # minutes / injury risk
     for p in squad:
         pr = projs.get(p.id)
-        if p.status != "a":
+        if player_departed(p):
+            # Chỗ DUY NHẤT người đã rời CLB còn được hiện: chính đội của bạn.
+            # Ở đây "Cảnh báo ra sân (u)" là câu trả lời sai — không có gì để
+            # theo dõi, không có ngày trở lại. Nói thẳng là phải bán.
+            sells.append({"id": p.id, "name": p.web_name,
+                          "reason": f"Đã rời CLB — {p.news or 'không còn ở giải'}.",
+                          "xp_next5": round(hx.get(p.id, 0), 1)})
+        elif p.status != "a":
             sells.append({"id": p.id, "name": p.web_name,
                           "reason": f"Cảnh báo ra sân ({p.status}).",
                           "xp_next5": round(hx.get(p.id, 0), 1)})

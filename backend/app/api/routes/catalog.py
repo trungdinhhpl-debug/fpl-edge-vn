@@ -39,14 +39,24 @@ def get_players(
     max_price: float | None = None,
     min_xp: float | None = None,
     limit: int = Query(800, le=1000),
+    include_departed: bool = False,
     db: Session = Depends(get_db),
 ) -> dict:
     # Con số đi kèm mốc của chính nó. Trang /players là nơi người đọc so xP giữa
     # các cầu thủ, nên "tính đến lúc nào" và "vòng nào đã đóng" phải nằm trong
     # cùng một phản hồi, không phải ở một endpoint khác mà giao diện có thể quên gọi.
     fetched = data_as_of(db)
+    players, n_departed = list_players(
+        db, position, team_id, max_price, min_xp, limit,
+        include_departed=include_departed,
+    )
     return {
-        "players": list_players(db, position, team_id, max_price, min_xp, limit),
+        "players": players,
+        # Số cầu thủ đã rời CLB nằm trong phạm vi bộ lọc hiện tại. Khi
+        # `include_departed` bật thì họ CÓ trong `players` — con số vẫn là số
+        # người đã rời, chỉ khác là không bị ẩn.
+        "departed_count": n_departed,
+        "departed_hidden": not include_departed,
         "data_as_of": iso_utc(fetched) if fetched else None,
         "last_completed_gw": last_completed_gameweek(db),
     }

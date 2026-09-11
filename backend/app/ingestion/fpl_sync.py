@@ -30,6 +30,7 @@ from app.models import (
 )
 from app.providers.expert_provider import ExpertProvider, compute_signal_score
 from app.providers.fpl_client import FPLClient
+from app.services.departures import has_left_club
 from app.services.season_state import not_played_condition, played_condition
 
 
@@ -237,6 +238,11 @@ def sync_bootstrap(db: Session, client: FPLClient) -> dict:
             status = e.get("status", "d")
             chance = e.get("chance_of_playing_next_round")
             news = e.get("news") or None
+            # Tin chuyển nhượng không phải tin chấn thương. Đường đọc đã tự lọc
+            # (services/news), nhưng không có lý do gì để tiếp tục ghi thêm: mỗi
+            # kỳ chuyển nhượng là ~100 bản ghi vô dụng trong bảng injury_reports.
+            if has_left_club(status, news):
+                continue
             impact = _injury_impact(status, chance)
             prev = latest_report.get(e["id"])
             unchanged = (

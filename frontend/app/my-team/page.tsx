@@ -33,7 +33,13 @@ export default function MyTeamPage() {
 
   async function loadPlayers() {
     if (Object.keys(pmap).length) return pmap;
-    const res = await getJSON<any>("/api/players?limit=1000");
+    // `include_departed` ở đây là BẮT BUỘC: đây là bảng TRA CỨU id → cầu thủ cho
+    // đội thật của bạn, không phải danh sách chào bán. Nếu bạn vẫn đang giữ một
+    // người đã chuyển đi — mà hàng nghìn người vẫn giữ Watkins sau khi anh ta
+    // sang Al Hilal — thì thiếu anh ta ở đây sẽ làm đội của bạn hiện ra 14 người
+    // mà không báo gì. Việc "đừng mua người đã đi" thuộc về trang Cầu thủ và
+    // optimizer, không phải chỗ này.
+    const res = await getJSON<any>("/api/players?limit=1000&include_departed=1");
     const map: Record<number, any> = {};
     res.players.forEach((p: any) => (map[p.id] = p));
     setPmap(map);

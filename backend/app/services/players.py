@@ -154,7 +154,16 @@ def player_scorecard(db: Session, player_id: int, gw: int | None = None) -> dict
 
 def list_players(db: Session, position: str | None = None, team_id: int | None = None,
                  max_price: float | None = None, min_xp: float | None = None,
-                 limit: int = 800) -> list[dict]:
+                 limit: int = 800,
+                 include_departed: bool = False) -> tuple[list[dict], int]:
+    """Trả về (danh sách, số cầu thủ đã rời CLB bị ẩn).
+
+    Người đã chuyển đi vẫn nằm trong bootstrap-static của FPL (xem
+    `services/departures`), nên nếu không lọc thì 100 dòng xP = 0 chen vào giữa
+    bảng — bạn không mua được họ, không xếp được họ, và họ đẩy những cái tên
+    thật ra khỏi màn hình. Mặc định ẩn; số bị ẩn được trả về để giao diện NÓI ra
+    là mình đang cắt, thay vì cắt lặng lẽ.
+    """
     teams = team_lookup(db)
     start = planning_start_gw(db)
     gws = list(range(start, start + 5))
@@ -178,10 +187,18 @@ def list_players(db: Session, position: str | None = None, team_id: int | None =
 
     rows = db.scalars(q).all()
     out = []
+    n_departed = 0
     for p in rows:
         base = player_public(p, teams.get(p.team_id))
         if max_price and base["price"] > max_price:
             continue
+        # Đếm TRƯỚC khi lọc, và chỉ đếm những người đã lọt qua mọi bộ lọc khác:
+        # chọn đội Arsenal thì con số phải là "5 người Arsenal đã rời", không
+        # phải 100 người của cả giải.
+        if base["departed"]:
+            n_departed += 1
+            if not include_departed:
+                continue
         proj = proj_next.get(p.id)
         merged = {
             **base,
@@ -202,7 +219,7 @@ def list_players(db: Session, position: str | None = None, team_id: int | None =
         out.append(merged)
 
     out.sort(key=lambda r: r["xp_next5"], reverse=True)
-    return out[:limit]
+    return out[:limit], n_departed
 
 
 def player_detail(db: Session, player_id: int) -> dict | None:

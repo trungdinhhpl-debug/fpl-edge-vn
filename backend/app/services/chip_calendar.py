@@ -42,6 +42,7 @@ from app.services.common import (
     projections_for_gw,
     team_lookup,
 )
+from app.services.departures import player_departed
 
 # Tên chip trong API FPL -> tên hiển thị. Khoá là `chip_type`+`name` của FPL.
 CHIP_LABELS = {
@@ -294,6 +295,9 @@ def wildcard_gain(db: Session, gw: int, squad_ids: list[int], budget: int,
             value=round(hx.get(pid, 0.0), 3), cap_value=round(hx.get(pid, 0.0), 3),
         )
         for pid, p in players.items()
+        # Người đã rời CLB không mua được, nên để họ trong pool sẽ thổi phồng
+        # lợi ích của wildcard bằng một đội hình không tồn tại.
+        if not player_departed(p)
     ]
     best = optimize_squad(pool, budget=budget, bench_weight=0.2)
     idx = {p.id: p.value for p in pool}
