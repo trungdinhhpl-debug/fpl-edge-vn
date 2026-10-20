@@ -424,6 +424,7 @@ def build_projections(
             lam_team_goals=lam_for,
             lam_conceded=lam_against,
             team_avg_gf=ts.season_avg_gf(team_id),
+            league_avg_goals=ts.baseline,
             n_fixtures=1,
             prior_xg90=prior_xg.get(p.id),
             prior_xa90=prior_xa.get(p.id),
@@ -447,6 +448,12 @@ def build_projections(
             penalties_order=p.penalties_order,
             lead_taker_on_pitch=lead_taker_on_pitch.get(team_id),
         )
+        # cùng co giãn theo sức tấn công như phần giải tích (mức trung bình mùa của
+        # đội so với nền giải), để share 11m của đội yếu không lớn hơn xP của nó
+        if ts.baseline > 0.1:
+            pen90 = pen_mod.fixture_scaled_penalty(
+                pen90, 1.0, ts.season_avg_gf(team_id) / ts.baseline
+            )
         return pen_mod.non_penalty_xg(p.expected_goals, attempts) + pen90 * (
             (p.minutes or 0) / 90.0
         )

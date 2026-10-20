@@ -178,6 +178,10 @@ def expected_points(
     lam_team_goals: float,
     lam_conceded: float,
     team_avg_gf: float,
+    # Nền bàn thắng của GIẢI (mỗi đội mỗi trận). Số 11m một đội được hưởng co giãn
+    # theo λ của trận SO VỚI NỀN NÀY — đội tấn công yếu được ít 11m hơn. None = lấy
+    # `team_avg_gf` làm mốc (gọi lẻ, không có ngữ cảnh giải).
+    league_avg_goals: float | None = None,
     n_fixtures: int = 1,
     # Nền xG/xA per-90 của RIÊNG cầu thủ này, lấy từ mùa trước và đã kéo về prior
     # theo vị trí theo độ liên quan. None = không có nền lịch sử -> prior vị trí.
@@ -266,7 +270,11 @@ def expected_points(
         # quả nào vẫn có giá trị 11m thật ở các trận tới.
         pen_xg90 = pen_rate90
         xg90 = xg90_open + pen_xg90
-    exp_pen_goals = pen_mod.fixture_scaled_penalty(pen_xg90, minutes_frac, fixture_adj)
+    # 11m co giãn theo sức tấn công của trận so với nền GIẢI, không so với trung bình
+    # của chính đội: mốc theo đội làm Hull và Man City cùng xuất phát từ một mức 11m.
+    pen_ref = league_avg_goals if league_avg_goals and league_avg_goals > 0.1 else team_avg_gf
+    attack_ratio = lam_team_goals / pen_ref if pen_ref and pen_ref > 0.1 else 1.0
+    exp_pen_goals = pen_mod.fixture_scaled_penalty(pen_xg90, minutes_frac, attack_ratio)
 
     # ---- component EVs ----
     # Bàn thắng trong một trận là đại lượng BẢO TOÀN: tổng của cả đội phải bằng số
@@ -359,7 +367,12 @@ def expected_points(
     # cards
     card_ev = yc90 * minutes_frac * rules.yellow_card_points + rc90 * minutes_frac * rules.red_card_points
 
-    negative = conceded_ev + card_ev  # both are <= 0
+    # 11m hỏng: −2 điểm mỗi quả. Số quả suy từ CHÍNH phần 11m đã vào xP (sau chuẩn
+    # hoá theo λ đội), nên cộng bàn và trừ quả hỏng nói về cùng những quả 11m.
+    exp_pen_misses = pen_mod.expected_penalty_misses(exp_pen_goals * team_goal_scale)
+    pen_miss_ev = exp_pen_misses * rules.penalty_miss_points
+
+    negative = conceded_ev + card_ev + pen_miss_ev  # all are <= 0
 
     xp = (
         appearance_ev
@@ -399,6 +412,8 @@ def expected_points(
             "bps90": round(bps90, 3),
             "xg90_open": round(xg90_open, 4),
             "exp_pen_goals": round(exp_pen_goals * team_goal_scale, 4),
+            "exp_pen_misses": round(exp_pen_misses, 4),
+            "pen_attack_ratio": round(attack_ratio, 3),
             "exp_goals": round(exp_goals, 4),
             "exp_assists": round(exp_assists, 4),
             "cs_prob": round(cs_prob, 4),

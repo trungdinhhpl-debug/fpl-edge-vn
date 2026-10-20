@@ -284,8 +284,22 @@ export default function MethodologyPage() {
               11m. Trừ theo tỷ lệ chỉ bớt ~0,05/90, nên engine tưởng anh ta tạo ~0,2 xG
               bóng sống mỗi 90 phút trong khi thật là ~0,07, và xP 5 vòng bị thổi lên
               ~3,6 điểm. Khi nguồn Premier League không lấy được, engine quay về cách trừ
-              theo tỷ lệ. Phần 11m <b>không co giãn theo độ khó trận mạnh như bóng
-              sống</b> — một quả 11m đáng 0,79 bàn dù đối thủ là ai.
+              theo tỷ lệ.
+            </p>
+            <p>
+              <b>Đội tấn công yếu được ít 11m hơn — gần tỷ lệ thuận.</b> Đo trên 140
+              đội-mùa (2019/20–2025/26, 708 quả): 1/3 đội yếu nhất được 0,109 quả/trận, 1/3
+              mạnh nhất 0,175. Hồi quy Poisson cho độ co giãn 0,74 ± 0,27 theo số bàn không
+              tính 11m; hiệu chỉnh nhiễu của thước đo đó ra <b>0,95</b> (theo số lần chạm
+              bóng trong vòng cấm: 1,09). Nên phần 11m của mỗi trận nhân{" "}
+              <code>(λ trận / nền giải)^0,95</code> — so với nền <i>của giải</i>, không so
+              với trung bình của chính đội. Mỗi quả 11m còn có <b>19% hỏng (−2 điểm)</b>:
+              tỷ lệ vào đo được 574/708 = 81%.
+            </p>
+            <p>
+              Phần 11m chỉ chiếm khoảng <b>4–9% xP 5 vòng</b> của người đá 11m số 1 (1–2
+              điểm). Tiền đạo đá 11m đứng cao chủ yếu vì xG bóng sống: Barry chưa đá quả nào
+              nhưng chiếm 51% xG của Everton.
             </p>
             <p>
               <b>Double Gameweek đã mô phỏng xoay tua và mệt mỏi.</b> Hai lần đá chính
@@ -297,23 +311,18 @@ export default function MethodologyPage() {
             </p>
             <details className="rounded-md border p-2">
               <summary className="cursor-pointer text-xs font-medium text-foreground">
-                Ba hệ số chưa khớp được từ dữ liệu
+                Hệ số chưa khớp được từ dữ liệu
               </summary>
               <ul className="mt-2 space-y-1.5 text-xs">
-                <li>
-                  <b>Độ co giãn của penalty theo độ khó trận (0,5).</b> 14 quả hỏng cả giải
-                  là quá ít để hồi quy số 11m theo sức mạnh tấn công. Hai đầu mút đều có
-                  nghĩa (0 = không phụ thuộc đối thủ, 1 = như bóng sống) nên chỉnh nó không
-                  bao giờ tạo ra trạng thái vô lý.
-                </li>
                 <li>
                   <b>Tương quan xoay tua (−0,25).</b> DB chưa có vòng đôi nào đã đá để khớp.
                   Đặt 0 là quay về hành vi cũ.
                 </li>
                 <li>
-                  <b>Tỷ lệ vào bóng của chấm 11m (79%)</b> — chỉ còn dùng ở đường dự phòng,
-                  khi không có số quả thật. Nó từng làm đếm thiếu: quy 14 quả hỏng về 67 quả
-                  đã đá, trong khi mùa 2025/26 thật là 92 quả (77 vào = 84%).
+                  Hai hệ số 11m trước đây nằm ở đây — độ co giãn 0,5 và tỷ lệ vào 79% — nay
+                  đều <b>đo được</b> (0,95 và 81%, xem trên). Riêng −6 BPS của quả 11m hỏng
+                  chưa đưa vào phần bonus, và Monte Carlo chưa mô phỏng quả hỏng (lệch xP
+                  ~0,04 điểm/trận với người đá 11m).
                 </li>
               </ul>
             </details>

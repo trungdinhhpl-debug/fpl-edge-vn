@@ -42,37 +42,46 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-# Tỷ lệ vào bóng của chấm 11m ở Ngoại hạng Anh. KHÔNG suy được từ dữ liệu FPL —
-# API cho số quả hỏng nhưng không cho số quả vào, nên không có mẫu số. Đây là hằng
-# số của giải đấu, lấy từ mức ~78–80% được thống kê rộng rãi nhiều mùa liên tiếp.
-# Nó chỉ dùng để quy `số quả hỏng -> số quả đã đá`, nên sai 2 điểm phần trăm ở đây
-# làm lệch tỷ lệ penalty khoảng 10%, tức khoảng 0.5% tổng bàn của một đội.
-PENALTY_CONVERSION = 0.79
+# Tỷ lệ vào bóng của chấm 11m ở Ngoại hạng Anh — ĐO ĐƯỢC: 574/708 quả = 0.811 trên 7
+# mùa 2019/20–2025/26 (API Premier League, `att_pen_goal` / tổng bốn kết cục). FPL
+# không có mẫu số này. Dùng ở hai chỗ: quy `số quả hỏng -> số quả đã đá` ở đường dự
+# phòng, và tính số quả HỎNG kỳ vọng (−2 điểm mỗi quả theo luật FPL).
+PENALTY_CONVERSION = 0.81
 
 # xG của một quả 11m. Đây là con số chuẩn trong mọi mô hình xG công khai và trùng
 # với tỷ lệ vào bóng ở trên — đúng theo định nghĩa của xG.
 PENALTY_XG = 0.79
 
-# Mức nền khi DB chưa có `penalties_missed` (dữ liệu đồng bộ trước khi có cột này).
-# Bằng đúng con số đo được trên mùa 2025/26 — xem `league_penalty_rate`.
-FALLBACK_PENALTY_GOALS_PER_TEAM_MATCH = 0.069
+# Mức nền (xG 11m mỗi trận-đội) khi không đo được tại chỗ. Bằng số ĐẾM THẬT mùa
+# 2025/26: 92 quả × 0.79 / 760 trận-đội. Con số cũ 0.069 suy từ số quả hỏng với tỷ lệ
+# vào 79% nên đếm thiếu 27% số quả.
+FALLBACK_PENALTY_GOALS_PER_TEAM_MATCH = 0.096
 
 # Tổng số quả hỏng tối thiểu của cả giải trước khi tin vào số đo tại chỗ. Dưới mức
 # này thì mẫu quá nhỏ và mức nền hợp lý hơn.
 MIN_MISSES_FOR_RATE = 6
 
-# Độ co giãn của chấm 11m theo độ khó trận, so với bóng sống (bóng sống = 1.0).
+# Số quả 11m một đội được hưởng co giãn theo SỨC TẤN CÔNG của trận, so với NỀN CỦA
+# GIẢI — ĐO ĐƯỢC (2026-10-20), thay cho hằng số 0.5 đặt tay trước đây.
 #
-# 0 nghĩa là penalty hoàn toàn không phụ thuộc đối thủ; 1.0 là hành vi cũ (co giãn
-# y hệt bóng sống). Đội áp đảo đúng là được hưởng nhiều 11m hơn — nên không phải 0
-# — nhưng quan hệ đó yếu và nhiễu hơn hẳn xG bóng sống, vì một quả 11m còn phụ
-# thuộc trọng tài và một tình huống đơn lẻ.
+# Hồi quy Poisson trên 140 đội-mùa 2019/20–2025/26 (API Premier League, 708 quả 11m,
+# hiệu ứng cố định theo mùa):
 #
-# Con số này **không khớp được từ dữ liệu đang có**: 14 quả hỏng cả giải là quá ít
-# để hồi quy số 11m theo sức mạnh tấn công của đội. Nó là hằng số cấu hình, cố ý
-# đặt ở giữa, và cả hai đầu mút đều là hành vi có nghĩa nên chỉnh nó không bao giờ
-# tạo ra trạng thái vô lý.
-PENALTY_FIXTURE_ELASTICITY = 0.5
+#   * theo số bàn KHÔNG tính 11m mỗi trận: e = 0.74 ± 0.27 (95%);
+#   * số bàn một mùa là thước đo NHIỄU của sức tấn công thật (độ tin cậy 0.78 trên
+#     thang log, phần nhiễu Poisson ≈ 1/số bàn), nên e thật ≈ 0.74/0.78 = 0.95;
+#   * theo số lần chạm bóng trong vòng cấm đối phương: e = 1.09 ± 0.34.
+#   * nhìn thô: 1/3 đội yếu nhất 0.109 quả/trận, 1/3 mạnh nhất 0.175.
+#
+# Ở đây áp cho λ của trận (đã là ước lượng co về prior, ít nhiễu hơn một mùa bàn
+# thắng) nên dùng con số đã hiệu chỉnh nhiễu. Hai điều mà hằng số cũ làm sai: mốc so
+# là trung bình CỦA CHÍNH ĐỘI (nên Hull và Man City cùng xuất phát từ một mức 11m),
+# và độ co giãn 0.5 chỉ bằng nửa thực tế — người đá 11m của đội yếu được cộng quá tay.
+PENALTY_ATTACK_ELASTICITY = 0.95
+
+# Chặn tỷ số λ/nền khi lấy luỹ thừa — lá chắn cho λ vô lý, không phải ràng buộc
+# thường trực (λ thật nằm trong ~0.4–3.0 lần nền giải).
+_ATTACK_RATIO_BOUNDS = (0.25, 3.0)
 
 # Phần penalty bị chặn ở đúng xG mà cầu thủ thật sự có — không bao giờ trừ nhiều
 # hơn cái đang có, để xG bóng sống không âm.
@@ -127,8 +136,10 @@ def league_penalty_rate(players: list, team_matches: int) -> PenaltyRate:
             ),
         )
     taken = misses / (1.0 - PENALTY_CONVERSION)
-    goals = taken * PENALTY_CONVERSION
-    rate = goals / team_matches
+    # Đơn vị xG (0.79 mỗi quả) — cùng đơn vị với `measured_penalty_rate` và với phần
+    # bị trừ khỏi xG tổng; số quả hỏng kỳ vọng tách riêng ở `expected_penalty_misses`.
+    xg = taken * PENALTY_XG
+    rate = xg / team_matches
     return PenaltyRate(
         goals_per_team_match=rate,
         n_misses=misses,
@@ -136,7 +147,7 @@ def league_penalty_rate(players: list, team_matches: int) -> PenaltyRate:
         measured=True,
         detail=(
             f"đo tại chỗ: {misses} quả hỏng -> ~{taken:.0f} quả đã đá -> "
-            f"{goals:.0f} bàn trên {team_matches} trận-đội = {rate:.3f} bàn/trận-đội"
+            f"{xg:.0f} xG trên {team_matches} trận-đội = {rate:.3f} xG/trận-đội"
         ),
     )
 
@@ -152,9 +163,9 @@ def measured_penalty_rate(samples: list[tuple[int, int]]) -> PenaltyRate:
     Đơn vị là **xG** (`PENALTY_XG` mỗi quả), cùng đơn vị với phần đã trừ khỏi xG
     tổng — nên phần cộng lại và phần trừ đi đo cùng một thứ.
 
-    Vì sao không dùng `league_penalty_rate` nữa khi có số thật: nó quy số quả hỏng
-    về số quả đã đá bằng tỷ lệ vào 79%, trong khi mùa 2025/26 thật là 77/92 = 84%
-    — nên nó đếm thiếu 27% số quả (67 so với 92) và hụt tỷ lệ từ 0.096 xuống 0.069.
+    Vì sao không dùng `league_penalty_rate` khi có số thật: nó quy số quả hỏng về số
+    quả đã đá bằng một tỷ lệ vào giả định, mà tỷ lệ vào dao động theo mùa (2025/26 là
+    77/92 = 84%) — với 79% nó đếm 67 quả thay vì 92.
     """
     taken = sum(max(0, a) for a, _ in samples)
     matches = sum(max(0, m) for _, m in samples)
@@ -239,15 +250,29 @@ def split_open_play(xg90_total: float, pen_xg90_rate: float) -> tuple[float, flo
 def fixture_scaled_penalty(
     pen_xg90_rate: float,
     minutes_frac: float,
-    fixture_adj: float,
-    elasticity: float = PENALTY_FIXTURE_ELASTICITY,
+    attack_ratio: float,
+    elasticity: float = PENALTY_ATTACK_ELASTICITY,
 ) -> float:
-    """Phần 11m kỳ vọng trong MỘT trận, đã tính số phút và độ khó trận.
+    """Phần 11m kỳ vọng (đơn vị xG) trong MỘT trận, đã tính số phút và sức tấn công.
 
-    Độ khó vào qua `fixture_adj ** elasticity` — mũ nhỏ hơn 1 nghĩa là chấm 11m
-    phản ứng với đối thủ yếu hơn bóng sống. Xem `PENALTY_FIXTURE_ELASTICITY`.
+    `attack_ratio` = λ bàn thắng của đội trong trận này / nền bàn thắng của GIẢI.
+    `pen_xg90_rate` là mức của một đội TRUNG BÌNH; đội tấn công yếu được hưởng ít
+    11m hơn gần tỷ lệ thuận — xem `PENALTY_ATTACK_ELASTICITY`.
     """
     if pen_xg90_rate <= 0 or minutes_frac <= 0:
         return 0.0
-    adj = max(fixture_adj, 1e-6) ** max(0.0, elasticity)
-    return pen_xg90_rate * minutes_frac * adj
+    lo, hi = _ATTACK_RATIO_BOUNDS
+    ratio = min(hi, max(lo, attack_ratio))
+    return pen_xg90_rate * minutes_frac * ratio ** max(0.0, elasticity)
+
+
+def expected_penalty_misses(exp_pen_xg: float) -> float:
+    """Số quả 11m HỎNG kỳ vọng, suy từ phần 11m kỳ vọng (đơn vị xG).
+
+    Mỗi quả mang `PENALTY_XG` xG, nên số quả đá = xG / 0.79; hỏng = đá × (1 − tỷ lệ
+    vào). FPL trừ 2 điểm mỗi quả hỏng — trước đây engine cộng phần bàn của quả 11m
+    mà không trừ phần hỏng, tức coi mọi quả 11m là lời chắc.
+    """
+    if exp_pen_xg <= 0:
+        return 0.0
+    return exp_pen_xg / PENALTY_XG * (1.0 - PENALTY_CONVERSION)

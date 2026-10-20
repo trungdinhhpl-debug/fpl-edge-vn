@@ -244,7 +244,11 @@ class Settings(BaseSettings):
     #   lệ trung bình; tỷ lệ 11m của giải cũng đếm thật thay vì suy từ số quả hỏng.
     #   Share ghi bàn của Monte Carlo dùng cùng thước đo. Thiếu nguồn thì quay về
     #   cách cũ.
-    model_version: str = "xp-0.11.0"
+    # 0.12.0 (2026-10-20): phần 11m co giãn theo λ của trận so với NỀN GIẢI với độ
+    #   co giãn ĐO ĐƯỢC 0.95 (140 đội-mùa, 708 quả) — trước là 0.5 đặt tay và so với
+    #   trung bình của chính đội, nên người đá 11m của đội yếu được cộng quá tay. Trừ
+    #   −2 điểm cho số quả 11m HỎNG kỳ vọng (tỷ lệ vào đo được 81%).
+    model_version: str = "xp-0.12.0"
 
     @property
     def cors_list(self) -> list[str]:

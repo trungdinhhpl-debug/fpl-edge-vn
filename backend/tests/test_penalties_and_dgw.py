@@ -30,8 +30,8 @@ def test_penalty_rate_is_measured_from_league_totals():
     """
     r = pen.league_penalty_rate([_P(1)] * 14, team_matches=760)
     assert r.measured
-    # 14 hỏng / 0.21 = 67 quả đã đá; × 0.79 = 53 bàn; / 760 = 0.069
-    assert r.goals_per_team_match == pytest.approx(0.0693, abs=0.002)
+    # 14 hỏng / (1 − 0.81) = 74 quả đã đá; × 0.79 xG = 58 xG; / 760 = 0.077
+    assert r.goals_per_team_match == pytest.approx(0.0766, abs=0.002)
     assert "14 quả hỏng" in r.detail
 
 
@@ -57,13 +57,38 @@ def test_second_taker_only_gets_penalties_when_the_first_is_absent():
     assert pen.penalty_xg90(rate_per_team_match=r, penalties_order=4) == 0.0
 
 
-def test_penalties_respond_less_to_fixture_difficulty_than_open_play():
-    """Một quả 11m đáng 0.79 bàn dù đối thủ là ai — nó không co như bóng sống."""
-    easy = pen.fixture_scaled_penalty(0.069, 0.9, 1.8)
-    hard = pen.fixture_scaled_penalty(0.069, 0.9, 0.5)
-    assert easy > hard, "phải vẫn phản ứng chút ít — đội áp đảo được hưởng nhiều 11m hơn"
-    # nhưng phản ứng YẾU hơn hẳn bóng sống, vốn co giãn đúng theo fixture_adj
-    assert (easy / hard) < (1.8 / 0.5), "đang co giãn mạnh như bóng sống"
+def test_weak_attacks_win_fewer_penalties_at_the_measured_elasticity():
+    """Số 11m co giãn theo λ/nền giải với độ co giãn ĐO ĐƯỢC (0.95), không phải 0.5.
+
+    Trước 2026-10-20 hằng số là 0.5 đặt tay, với lập luận "11m ít phụ thuộc đối
+    thủ". Dữ liệu 140 đội-mùa nói ngược lại: 1/3 đội yếu nhất 0.109 quả/trận, 1/3
+    mạnh nhất 0.175 — gần tỷ lệ thuận. Người đá 11m của đội yếu từng được cộng quá tay.
+    """
+    weak = pen.fixture_scaled_penalty(0.096, 1.0, 0.6)
+    avg = pen.fixture_scaled_penalty(0.096, 1.0, 1.0)
+    strong = pen.fixture_scaled_penalty(0.096, 1.0, 1.4)
+    assert avg == pytest.approx(0.096), "đội trung bình phải nhận đúng mức nền giải"
+    assert weak / avg == pytest.approx(0.6 ** pen.PENALTY_ATTACK_ELASTICITY)
+    assert strong / weak == pytest.approx((1.4 / 0.6) ** pen.PENALTY_ATTACK_ELASTICITY)
+    assert 0.74 <= pen.PENALTY_ATTACK_ELASTICITY <= 1.1, "ra ngoài dải đã đo"
+    # λ vô lý bị chặn chứ không nổ
+    assert pen.fixture_scaled_penalty(0.096, 1.0, 50.0) == pytest.approx(
+        pen.fixture_scaled_penalty(0.096, 1.0, 3.0)
+    )
+
+
+def test_missed_penalties_cost_points():
+    """FPL trừ 2 điểm mỗi quả 11m hỏng; trước đây engine coi mọi quả là lời chắc."""
+    misses = pen.expected_penalty_misses(0.79)      # đúng một quả kỳ vọng
+    assert misses == pytest.approx(1 - pen.PENALTY_CONVERSION)
+    assert pen.expected_penalty_misses(0.0) == 0.0
+    common = dict(_BASE, lam_team_goals=1.42, league_avg_goals=1.42)
+    taker = expected_points(penalties_order=1, penalty_rate=0.096, **common)
+    assert taker.components["exp_pen_misses"] == pytest.approx(
+        taker.components["exp_pen_goals"] / 0.79 * 0.19, abs=1e-3
+    )
+    non = expected_points(penalties_order=None, penalty_rate=0.096, **common)
+    assert non.components["exp_pen_misses"] == 0.0
 
 
 def test_low_xg_penalty_taker_is_not_inflated_out_of_thin_air():
@@ -106,20 +131,22 @@ def test_non_taker_is_completely_unaffected_by_the_penalty_split():
         assert on.xp == pytest.approx(off.xp, abs=1e-9)
 
 
-def test_penalty_taker_keeps_more_value_in_a_hard_fixture():
-    """Tính chất cốt lõi: phần 11m giữ được giá trị khi lịch xấu.
+def test_penalty_value_shrinks_with_a_weak_attack():
+    """Người đá 11m của một đội tấn công yếu nhận ÍT giá trị 11m hơn — gần tỷ lệ thuận.
 
-    Đo bằng tỷ số dễ/khó — nếu tách đúng thì tỷ số đó phải NHỎ hơn của người không
-    đá 11m, vì một phần sản lượng của anh ta không co theo đối thủ.
+    Đo trên chính thành phần 11m (không phải tổng bàn) để không lẫn với bóng sống.
     """
-    def ratio(order, rate):
-        easy = expected_points(penalties_order=order, penalty_rate=rate,
-                               lam_team_goals=2.3, **_BASE).goals
-        hard = expected_points(penalties_order=order, penalty_rate=rate,
-                               lam_team_goals=0.85, **_BASE).goals
-        return easy / hard
+    def pen_goals(lam):
+        return expected_points(
+            penalties_order=1, penalty_rate=0.096, lam_team_goals=lam,
+            league_avg_goals=1.42, **_BASE,
+        ).components["exp_pen_goals"]
 
-    assert ratio(1, 0.069) < ratio(None, 0.069)
+    weak, strong = pen_goals(0.85), pen_goals(2.3)
+    assert weak < strong
+    assert strong / weak == pytest.approx(
+        (2.3 / 0.85) ** pen.PENALTY_ATTACK_ELASTICITY, rel=0.02
+    )
 
 
 def test_penalty_component_is_reported_separately():
