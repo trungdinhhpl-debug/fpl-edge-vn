@@ -37,6 +37,7 @@ from app.models import (
     PlayerFixtureGoals,
     PlayerGameweekStat,
     PlayerGoalOdds,
+    PlayerPenaltyStat,
     PlayerProjection,
     Team,
 )
@@ -198,11 +199,10 @@ def build_projections(
         matches_played[f.team_h] += 1
         matches_played[f.team_a] += 1
 
-    # team season expected-goal totals (for MC shares)
-    team_xg_total: dict[int, float] = defaultdict(float)
+    # team season expected-assist totals; tổng xG của đội cho share MC được dựng
+    # sau, bằng `_goal_basis`, khi đã biết tỷ lệ 11m
     team_xa_total: dict[int, float] = defaultdict(float)
     for p in players:
-        team_xg_total[p.team_id] += p.expected_goals or 0.0
         team_xa_total[p.team_id] += p.expected_assists or 0.0
 
     # recent per-GW minutes (optional; present only if detail sync ran)
@@ -225,6 +225,16 @@ def build_projections(
     # đổi sang luật đang áp trong xpoints (luật BPS 2026/27 đã đổi).
     stats_from_season = _stats_season(db)
 
+    # Số quả 11m THẬT từng cầu thủ đã đá, theo mùa (app/providers/pl_penalties.py).
+    # {mùa: {player_id: số quả}}. Mùa vắng mặt = chưa biết -> engine trừ 11m theo
+    # tỷ lệ như trước; cầu thủ có mặt với 0 quả = biết chắc là 0.
+    pen_attempts_by_season: dict[str, dict[int, int]] = defaultdict(dict)
+    for _row in db.scalars(select(PlayerPenaltyStat)).all():
+        pen_attempts_by_season[_row.season_name][_row.player_id] = _row.attempts or 0
+    # Mẫu của `p.expected_goals` là mùa `stats_from_season` (trước vòng 1 FPL vẫn
+    # phát tổng mùa trước), nên số quả 11m phải lấy của ĐÚNG mùa đó.
+    pen_attempts_sample = pen_attempts_by_season.get(stats_from_season or "", {})
+
     # Nền lịch sử riêng từng cầu thủ (mùa trước), đã kéo về mức nền chung theo
     # `prior_rel`. Rỗng khi `player_season_history` chưa được nạp — khi đó mọi thứ
     # rơi về prior theo vị trí y như trước, nên đây là một nâng cấp cộng thêm chứ
@@ -234,9 +244,18 @@ def build_projections(
     from app.engine.xmins import PRIOR_START_RATE
     from app.engine.xpoints import PRIOR_XA90, PRIOR_XG90
 
-    _priors = priors_mod.load_priors(db, _scoring.SEASON)
+    from app.bps_rules import previous_season as _previous_season
+
+    _priors = priors_mod.load_priors(
+        db, _scoring.SEASON,
+        penalty_attempts=pen_attempts_by_season.get(
+            _previous_season(_scoring.SEASON) or ""
+        ),
+    )
     prior_start: dict[int, float] = {}
     prior_xg: dict[int, float] = {}
+    # Cầu thủ mà `prior_xg` đã là xG BÓNG SỐNG (đã trừ 11m thật của mùa trước).
+    prior_xg_open: set[int] = set()
     prior_xa: dict[int, float] = {}
     for p in players:
         pri = _priors.get(p.id)
@@ -244,9 +263,17 @@ def build_projections(
             continue
         rel = prior_rel.get(p.id, 1.0)
         prior_start[p.id] = priors_mod.blended(pri.start_rate, PRIOR_START_RATE, rel)
-        prior_xg[p.id] = priors_mod.blended(
-            pri.xg90, PRIOR_XG90.get(p.element_type, 0.1), rel
-        )
+        if pri.npxg90 is not None:
+            # Phần kéo về prior theo vị trí (khi rel < 1) là xG tổng của một cầu thủ
+            # trung bình, gồm ~0.01/90 từ 11m — nhỏ hơn sai số của chính prior đó.
+            prior_xg[p.id] = priors_mod.blended(
+                pri.npxg90, PRIOR_XG90.get(p.element_type, 0.1), rel
+            )
+            prior_xg_open.add(p.id)
+        else:
+            prior_xg[p.id] = priors_mod.blended(
+                pri.xg90, PRIOR_XG90.get(p.element_type, 0.1), rel
+            )
         prior_xa[p.id] = priors_mod.blended(
             pri.xa90, PRIOR_XA90.get(p.element_type, 0.1), rel
         )
@@ -332,18 +359,35 @@ def build_projections(
         )
 
     # ---- chấm 11m: tỷ lệ đo ở cấp GIẢI, người đá đọc từ `penalties_order` ------
-    # Cấp cầu thủ không đủ mẫu — 15/20 người đá 11m số 1 hỏng đúng 0 quả, nên
-    # `penalties_missed / (1 − tỷ lệ vào)` ước ra 0 cho họ và 9.5 quả cho người hỏng
-    # 2 quả. Tỷ lệ vì thế được suy từ tổng số quả hỏng của CẢ GIẢI, còn việc ai đá
-    # thì đọc từ `penalties_order`. Xem app/engine/penalties.py.
+    # Có số quả 11m thật (API Premier League) thì đếm thẳng. Không có thì suy từ
+    # tổng số quả HỎNG của cả giải — cấp cầu thủ không đủ mẫu cho phép suy đó: 15/20
+    # người đá 11m số 1 hỏng đúng 0 quả, nên `penalties_missed / (1 − tỷ lệ vào)` ước
+    # ra 0 cho họ và 9.5 quả cho người hỏng 2 quả. Việc ai đá ở các trận TỚI luôn
+    # đọc từ `penalties_order`. Xem app/engine/penalties.py.
     _team_matches = sum(matches_played.values())
-    if _team_matches == 0:
-        # Tiền mùa: `penalties_missed` FPL đang phát là tổng của MÙA TRƯỚC, nên mẫu
-        # số phải là số trận-đội của mùa trước chứ không phải 0 của mùa này. Ghép
-        # tử số một mùa với mẫu số mùa khác là cách chắc chắn ra sai tỷ lệ.
-        _n_gw = db.scalar(select(func.count()).select_from(Gameweek)) or 38
-        _team_matches = _n_gw * len(teams)
-    pen_rate = pen_mod.league_penalty_rate(players, team_matches=_team_matches)
+    _n_gw = db.scalar(select(func.count()).select_from(Gameweek)) or 38
+    _season_team_matches = _n_gw * len(teams)
+    _cur_season = _scoring.SEASON
+    _prev_season = _previous_season(_cur_season)
+    if _cur_season in pen_attempts_by_season:
+        # Có số quả 11m THẬT: đếm thẳng, gộp mùa trước làm nền. Mùa trước được tính
+        # trọn số trận-đội của nó; mùa này chỉ tính những trận đã đá.
+        _samples = [(
+            sum(pen_attempts_by_season[_cur_season].values()), _team_matches,
+        )]
+        if _prev_season in pen_attempts_by_season:
+            _samples.append((
+                sum(pen_attempts_by_season[_prev_season].values()),
+                _season_team_matches,
+            ))
+        pen_rate = pen_mod.measured_penalty_rate(_samples)
+    else:
+        if _team_matches == 0:
+            # Tiền mùa: `penalties_missed` FPL đang phát là tổng của MÙA TRƯỚC, nên
+            # mẫu số phải là số trận-đội của mùa trước chứ không phải 0 của mùa này.
+            # Ghép tử số một mùa với mẫu số mùa khác là cách chắc chắn ra sai tỷ lệ.
+            _team_matches = _season_team_matches
+        pen_rate = pen_mod.league_penalty_rate(players, team_matches=_team_matches)
     # Xác suất người đá 11m SỐ 1 của mỗi đội có mặt trên sân — người số 2 chỉ đá khi
     # người số 1 vắng, nên phần của anh ta suy từ mô hình phút chứ không từ một tỷ
     # lệ chia ghi cứng.
@@ -383,7 +427,35 @@ def build_projections(
             n_fixtures=1,
             prior_xg90=prior_xg.get(p.id),
             prior_xa90=prior_xa.get(p.id),
+            pen_attempts_season=pen_attempts_sample.get(p.id),
+            prior_xg90_is_open_play=p.id in prior_xg_open,
         )
+
+    def _goal_basis(p, team_id: int) -> float:
+        """Sản lượng ghi bàn cả mùa dùng làm SHARE trong Monte Carlo.
+
+        Phải cùng một thước đo với phần giải tích: khi biết số quả 11m thật thì là
+        xG bóng sống + phần 11m KỲ VỌNG theo `penalties_order` (cùng số phút), chứ
+        không phải xG tổng — nếu không, người đá nhiều 11m vẫn ôm phần bàn của MC
+        như cũ dù xP đã hạ, và trần/P(haul) của anh ta lệch khỏi chính xP của mình.
+        """
+        attempts = pen_attempts_sample.get(p.id)
+        if attempts is None:
+            return p.expected_goals or 0.0
+        pen90 = pen_mod.penalty_xg90(
+            rate_per_team_match=pen_rate.goals_per_team_match,
+            penalties_order=p.penalties_order,
+            lead_taker_on_pitch=lead_taker_on_pitch.get(team_id),
+        )
+        return pen_mod.non_penalty_xg(p.expected_goals, attempts) + pen90 * (
+            (p.minutes or 0) / 90.0
+        )
+
+    goal_basis: dict[int, float] = {p.id: _goal_basis(p, p.team_id) for p in players}
+    # mẫu số dự phòng của share MC — cùng thước đo với tử số
+    team_xg_total: dict[int, float] = defaultdict(float)
+    for p in players:
+        team_xg_total[p.team_id] += goal_basis[p.id]
 
     def _stale_reason(odds) -> str | None:
         """Kèo quá cũ thì CHỈ hiển thị, không vào xP — và nói rõ là vì cũ.
@@ -480,7 +552,7 @@ def build_projections(
                     # thiếu đó biến thành bàn thắng thất lạc — đo được: tiền đạo chỉ
                     # nhận 88% mức giải tích dù tổng bàn của đội đã được bảo toàn.
                     if est.xmins > 3:
-                        sim_xg[(team_id, fixture_id)] += p.expected_goals or 0.0
+                        sim_xg[(team_id, fixture_id)] += goal_basis[p.id]
                         sim_xa[(team_id, fixture_id)] += p.expected_assists or 0.0
                     by_fixture[fixture_id].append(bonus_mod.BonusEntry(
                         player_id=p.id,
@@ -646,7 +718,7 @@ def build_projections(
 
                     if run_mc and est.xmins > 3:
                         share_goal = (
-                            (p.expected_goals or 0) / denom_xg
+                            goal_basis[p.id] / denom_xg
                             if denom_xg > 0.1
                             else 0.0
                         )

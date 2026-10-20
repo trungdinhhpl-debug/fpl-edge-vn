@@ -245,11 +245,13 @@ export default function MethodologyPage() {
           <CardContent className="space-y-2 text-sm text-muted-foreground">
             <p>Mô phỏng ở cấp <b>trận đấu của đội</b>: mỗi vòng lặp rút một lần tổng bàn thắng và tổng bàn thua, rồi mới chia cho cầu thủ — sạch lưới dùng chung cho GK + hậu vệ, bàn thắng rút từ chính tổng bàn đó.</p>
             <code className="block rounded bg-muted p-2 text-xs text-foreground">
-              share_goal = xG cầu thủ / Σ xG đội · share_assist = xA cầu thủ / Σ xG đội
+              share_goal = (npxG + 11m kỳ vọng) / Σ đội · share_assist = xA cầu thủ / Σ đội
             </code>
             <p>
-              <b>Là xG share, không phải npxG hay shot share</b> — FPL không tách npxG nên
-              phần xG từ chấm 11m nằm luôn trong share.
+              <b>npxG + phần 11m kỳ vọng, không phải xG thô.</b> npxG = xG − 0,79 × số
+              quả 11m cầu thủ thực sự đã đá; phần 11m kỳ vọng chia theo{" "}
+              <code>penalties_order</code>. Dùng xG thô thì người vừa đá vài quả 11m ôm
+              luôn phần đó vào share, dù quả 11m tới chưa chắc đến lượt anh ta.
             </p>
             <p>
               Tổng bàn được chia theo <b>Multinomial</b>, nên phần chia ra không bao giờ vượt
@@ -266,14 +268,24 @@ export default function MethodologyPage() {
               ceiling, floor, P(haul), phương sai.
             </p>
             <p>
-              <b>Penalty đã tách khỏi bóng sống.</b> FPL không cho{" "}
-              <code>penalties_scored</code> cũng không cho npxG, và{" "}
-              <code>penalties_missed</code> thì quá thưa để dùng ở cấp cầu thủ —{" "}
-              <b>15/20 người đá 11m số 1 hỏng đúng 0 quả</b>, còn người hỏng 2 quả thì
-              ước ra 70% xG cả mùa là penalty. Nên tỷ lệ được đo ở <b>cấp giải</b> (14
-              quả hỏng trên 760 trận-đội → 0,069 bàn/trận-đội), còn ai đá thì đọc từ{" "}
-              <code>penalties_order</code>. Phần 11m <b>không co giãn theo độ khó trận
-              mạnh như bóng sống</b> — một quả 11m đáng 0,79 bàn dù đối thủ là ai.
+              <b>Penalty đã tách khỏi bóng sống — bằng số quả THẬT.</b> FPL chỉ phát xG
+              tổng (gồm 11m) và không có số quả 11m đã đá, nên số đó lấy từ API công khai
+              của Premier League (khớp cầu thủ bằng mã Opta). Engine trừ đúng{" "}
+              <b>0,79 × số quả đã đá</b> khỏi xG của mùa này <i>và</i> của nền mùa trước,
+              rồi cộng lại phần 11m kỳ vọng theo <code>penalties_order</code> (người số 2
+              chỉ được phần khi người số 1 vắng — suy từ mô hình phút). Tỷ lệ 11m của giải
+              cũng đếm thật: 103 quả trên 900 trận-đội (mùa này + mùa trước) → 0,090
+              xG/trận-đội.
+            </p>
+            <p>
+              Vì sao phải đếm thật: trước 20/10/2026 engine trừ một <i>tỷ lệ trung bình</i>.
+              Le Fée (Sunderland) được FPL xếp đá 11m <b>số 2</b> nhưng đã đá{" "}
+              <b>6 quả trong ~40 trận</b> — 1,58/2,09 xG mùa này và 3,16/5,22 mùa trước là
+              11m. Trừ theo tỷ lệ chỉ bớt ~0,05/90, nên engine tưởng anh ta tạo ~0,2 xG
+              bóng sống mỗi 90 phút trong khi thật là ~0,07, và xP 5 vòng bị thổi lên
+              ~3,6 điểm. Khi nguồn Premier League không lấy được, engine quay về cách trừ
+              theo tỷ lệ. Phần 11m <b>không co giãn theo độ khó trận mạnh như bóng
+              sống</b> — một quả 11m đáng 0,79 bàn dù đối thủ là ai.
             </p>
             <p>
               <b>Double Gameweek đã mô phỏng xoay tua và mệt mỏi.</b> Hai lần đá chính
@@ -299,9 +311,9 @@ export default function MethodologyPage() {
                   Đặt 0 là quay về hành vi cũ.
                 </li>
                 <li>
-                  <b>Tỷ lệ vào bóng của chấm 11m (79%).</b> API cho số quả hỏng nhưng không
-                  cho số quả vào, nên không có mẫu số. Sai 2 điểm phần trăm ở đây làm lệch
-                  khoảng 0,5% tổng bàn của một đội.
+                  <b>Tỷ lệ vào bóng của chấm 11m (79%)</b> — chỉ còn dùng ở đường dự phòng,
+                  khi không có số quả thật. Nó từng làm đếm thiếu: quy 14 quả hỏng về 67 quả
+                  đã đá, trong khi mùa 2025/26 thật là 92 quả (77 vào = 84%).
                 </li>
               </ul>
             </details>

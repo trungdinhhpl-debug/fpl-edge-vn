@@ -49,17 +49,29 @@ class PlayerPrior:
     xa90: float | None
     minutes: int
     season: str
+    # xG BÓNG SỐNG/90 = (xG − 0.79 × số quả 11m thật) / số 90 phút. None = chưa
+    # biết số quả 11m của mùa đó -> người dùng prior phải trừ theo tỷ lệ.
+    npxg90: float | None = None
 
 
 def load_priors(db: Session, current_season: str | None,
-                reliability: dict[int, float] | None = None) -> dict[int, PlayerPrior]:
+                reliability: dict[int, float] | None = None,
+                penalty_attempts: dict[int, int] | None = None,
+                ) -> dict[int, PlayerPrior]:
     """{player_id: PlayerPrior} dựng từ mùa liền trước mùa đang chơi.
 
     `reliability` là hệ số 0..1 từ `season_state.prior_reliability()`. Nó KHÔNG
     được áp ở đây — người gọi trộn với prior chung, vì "kéo về đâu" là câu hỏi của
     từng chỗ dùng (xMins kéo về tỷ lệ đá chính nền, xP kéo về xG/90 theo vị trí).
     Tham số này chỉ để lọc bớt: hệ số quá thấp thì prior riêng không còn nghĩa.
+
+    `penalty_attempts` = {player_id: số quả 11m đã đá ở MÙA TRƯỚC}. Có thì
+    `npxg90` được điền: `history_past` của FPL là xG tổng, nên người đá nhiều 11m
+    mùa trước mang cả phần đó vào nền bóng sống (Le Fée 2025/26: 3.16/5.22 xG là
+    11m). Cầu thủ vắng trong dict -> `npxg90 = None` (chưa biết, không phải 0).
     """
+    from app.engine.penalties import non_penalty_xg
+
     prev = bps_rules.previous_season(current_season)
     if not prev:
         return {}
@@ -81,6 +93,13 @@ def load_priors(db: Session, current_season: str | None,
             xa90=(r.expected_assists / mins90) if r.minutes >= 180 else None,
             minutes=r.minutes,
             season=prev,
+            npxg90=(
+                non_penalty_xg(r.expected_goals, penalty_attempts[r.player_id]) / mins90
+                if r.minutes >= 180
+                and penalty_attempts is not None
+                and r.player_id in penalty_attempts
+                else None
+            ),
         )
     return out
 

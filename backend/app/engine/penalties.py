@@ -27,6 +27,16 @@ chia bịa ra.
 
 Tỷ lệ được **tính tại chỗ từ dữ liệu trong DB**, không ghi cứng: mùa sau số khác thì
 nó tự đổi theo.
+
+**Cập nhật 2026-10-20 — khi BIẾT số quả thật, tách theo từng cầu thủ.** Lập luận ở
+trên đúng cho dữ liệu FPL, nhưng API Premier League có số quả 11m đã đá của từng
+người (`app/providers/pl_penalties.py`). Khi có số đó, engine trừ đúng
+`0.79 × số quả` khỏi xG tổng (`non_penalty_xg`) cho TỪNG mùa — mẫu mùa này lẫn nền
+mùa trước — rồi cộng lại phần 11m kỳ vọng theo `penalties_order` như cũ. Cách trừ
+theo tỷ lệ vẫn giữ làm đường dự phòng khi chưa có số. Lý do phải đổi, đo được:
+Le Fée được FPL xếp đá 11m SỐ 2 nhưng đã đá 6 quả trong ~40 trận (3.16/5.22 xG mùa
+trước là 11m); cách trừ theo tỷ lệ chỉ bớt ~0.05/90 nên engine tưởng anh ta tạo ra
+~0.20 xG bóng sống mỗi 90 phút, trong khi thật là ~0.07.
 """
 from __future__ import annotations
 
@@ -129,6 +139,56 @@ def league_penalty_rate(players: list, team_matches: int) -> PenaltyRate:
             f"{goals:.0f} bàn trên {team_matches} trận-đội = {rate:.3f} bàn/trận-đội"
         ),
     )
+
+
+def measured_penalty_rate(samples: list[tuple[int, int]]) -> PenaltyRate:
+    """Tỷ lệ 11m của giải khi BIẾT số quả đã đá (không phải suy từ số quả hỏng).
+
+    `samples` = [(số quả đã đá, số trận-đội), …] — mùa này và mùa trước, gộp lại.
+    Gộp vì mùa này còn mỏng (vòng 7: 11 quả / 140 trận-đội), còn tỷ lệ 11m là hằng
+    số của GIẢI chứ không của mùa: mùa trước tự nhiên làm nền, và mùa này lấn dần
+    khi số trận tăng.
+
+    Đơn vị là **xG** (`PENALTY_XG` mỗi quả), cùng đơn vị với phần đã trừ khỏi xG
+    tổng — nên phần cộng lại và phần trừ đi đo cùng một thứ.
+
+    Vì sao không dùng `league_penalty_rate` nữa khi có số thật: nó quy số quả hỏng
+    về số quả đã đá bằng tỷ lệ vào 79%, trong khi mùa 2025/26 thật là 77/92 = 84%
+    — nên nó đếm thiếu 27% số quả (67 so với 92) và hụt tỷ lệ từ 0.096 xuống 0.069.
+    """
+    taken = sum(max(0, a) for a, _ in samples)
+    matches = sum(max(0, m) for _, m in samples)
+    if matches <= 0:
+        return PenaltyRate(
+            goals_per_team_match=FALLBACK_PENALTY_GOALS_PER_TEAM_MATCH,
+            n_misses=0, n_team_matches=0, measured=False,
+            detail="chưa có trận nào để chia — dùng mức nền",
+        )
+    rate = taken * PENALTY_XG / matches
+    return PenaltyRate(
+        goals_per_team_match=rate,
+        n_misses=0,
+        n_team_matches=matches,
+        measured=True,
+        detail=(
+            f"đếm thật: {taken} quả 11m trên {matches} trận-đội × {PENALTY_XG} xG "
+            f"= {rate:.3f} xG/trận-đội"
+        ),
+    )
+
+
+def non_penalty_xg(xg_total: float, attempts: int) -> float:
+    """xG bóng sống = xG tổng − `PENALTY_XG` × số quả 11m ĐÃ ĐÁ (không âm).
+
+    Đây là phép trừ đúng — trừ cái đã thực sự xảy ra trong mẫu — thay cho trừ một
+    tỷ lệ trung bình. Với người đá 11m đúng bằng mức trung bình thì hai cách trùng
+    nhau; với người đá nhiều hơn (Le Fée: 6 quả trong ~40 trận khi chỉ được xếp số
+    2) thì cách cũ để lọt cả phần thừa vào bóng sống.
+
+    0.79 là xG FPL/Opta gán cho MỘT quả 11m — kiểm trên dữ liệu: trận chỉ có đúng
+    một cú sút là quả 11m ra đúng 0.79 (Gibbs-White vòng 2, Rudoni vòng 6, 2026/27).
+    """
+    return max(0.0, (xg_total or 0.0) - PENALTY_XG * max(0, attempts or 0))
 
 
 def penalty_xg90(

@@ -183,10 +183,17 @@ def expected_points(
     # theo vị trí theo độ liên quan. None = không có nền lịch sử -> prior vị trí.
     prior_xg90: float | None = None,
     prior_xa90: float | None = None,
+    # Số quả 11m cầu thủ ĐÃ ĐÁ trong đúng mẫu của `xg_season`. None = chưa biết ->
+    # trừ 11m theo tỷ lệ trung bình như trước. Xem app/engine/penalties.py.
+    pen_attempts_season: int | None = None,
+    # True khi `prior_xg90` đã là xG BÓNG SỐNG (đã trừ số quả 11m thật của mùa
+    # trước). False = prior là xG tổng, phải trừ theo tỷ lệ.
+    prior_xg90_is_open_play: bool = False,
 ) -> XPBreakdown:
     pos = element_type
     rules = RULES
     mins90 = max(minutes_season, 1) / 90.0
+    prior_xg_rate = PRIOR_XG90.get(pos, 0.1) if prior_xg90 is None else prior_xg90
 
     # per-90 underlying, shrunk toward prior
     #
@@ -195,11 +202,7 @@ def expected_points(
     # bé nên trọng số nghiêng hẳn về prior — nhưng đúng lúc đó nó quyết định tất
     # cả: một tiền đạo 0.7 xG/90 và một tiền đạo 0.15 xG/90 không được phép cùng
     # xuất phát từ 0.35.
-    xg90 = _shrink(
-        xg_season / mins90,
-        PRIOR_XG90.get(pos, 0.1) if prior_xg90 is None else prior_xg90,
-        minutes_season,
-    )
+    xg90 = _shrink(xg_season / mins90, prior_xg_rate, minutes_season)
     xa90 = _shrink(
         xa_season / mins90,
         PRIOR_XA90.get(pos, 0.1) if prior_xa90 is None else prior_xa90,
@@ -238,7 +241,31 @@ def expected_points(
         penalties_order=penalties_order,
         lead_taker_on_pitch=lead_taker_on_pitch,
     )
-    xg90_open, pen_xg90 = pen_mod.split_open_play(xg90, pen_rate90)
+    season_known = pen_attempts_season is not None
+    prior_known = prior_xg90 is not None and prior_xg90_is_open_play
+    if not season_known and not prior_known:
+        # Không biết số quả 11m thật ở mẫu nào: trừ theo tỷ lệ (hành vi cũ).
+        xg90_open, pen_xg90 = pen_mod.split_open_play(xg90, pen_rate90)
+    else:
+        # Biết số quả thật: trừ ĐÚNG phần 11m đã xảy ra trong từng mẫu, rồi co giãn
+        # trên xG bóng sống. Mẫu nào chưa biết thì mẫu đó vẫn trừ theo tỷ lệ — mỗi
+        # mẫu được làm sạch bằng thông tin tốt nhất mà CHÍNH nó có.
+        if season_known:
+            season_open = (
+                pen_mod.non_penalty_xg(xg_season, pen_attempts_season) / mins90
+            )
+        else:
+            season_open = max(0.0, xg_season / mins90 - pen_rate90)
+        prior_open = (
+            prior_xg_rate if prior_known else max(0.0, prior_xg_rate - pen_rate90)
+        )
+        xg90_open = _shrink(season_open, prior_open, minutes_season)
+        # Phần 11m kỳ vọng cộng lại ĐẦY ĐỦ theo `penalties_order`. Trần ở
+        # `split_open_play` tồn tại vì phần trừ là ước đoán; ở đây phần trừ là số
+        # đếm thật nên không còn gì để chặn — người được xếp đá 11m mà mẫu chưa có
+        # quả nào vẫn có giá trị 11m thật ở các trận tới.
+        pen_xg90 = pen_rate90
+        xg90 = xg90_open + pen_xg90
     exp_pen_goals = pen_mod.fixture_scaled_penalty(pen_xg90, minutes_frac, fixture_adj)
 
     # ---- component EVs ----

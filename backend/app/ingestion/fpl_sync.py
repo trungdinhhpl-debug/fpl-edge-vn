@@ -924,6 +924,96 @@ def replace_role(rec, role, reason):
     from dataclasses import replace as _replace
 
     return _replace(rec, role=role, reason=reason)
+
+
+def sync_player_penalties(db: Session) -> dict:
+    """Số quả 11m thực tế của mùa này và mùa trước, từ API Premier League.
+
+    Hai mùa vì engine dùng cả hai: mùa này là mẫu đang tích, mùa trước là nền
+    (`player_priors`). Cả hai đều là xG TỔNG từ FPL, nên cả hai cần trừ đúng số quả
+    11m của CHÍNH mùa đó — trừ ở một phía thì phía kia vẫn phồng.
+
+    Mỗi mùa lấy thành công thì MỌI cầu thủ FPL được ghi một hàng (0 quả cũng ghi):
+    nguồn chỉ liệt kê người có đá, và "vắng mặt trong danh sách đầy đủ" là 0 — còn
+    "không có hàng" phải giữ nghĩa CHƯA BIẾT để engine quay về cách trừ theo tỷ lệ.
+    Mùa lấy hỏng thì không đụng tới hàng cũ của mùa đó.
+    """
+    from app.models import PlayerPenaltyStat, Season
+    from app.bps_rules import previous_season
+    from app.providers.pl_penalties import (
+        SOURCE_NAME,
+        SOURCE_URL,
+        fetch_penalties,
+        get_pl_penalties_provider,
+    )
+
+    label = "Premier League — số quả 11m"
+    provider = get_pl_penalties_provider()
+    if provider is None:
+        _log(db, label, SOURCE_URL, "ok", 0,
+             "PL_PENALTIES_ENABLED=false — engine trừ 11m theo tỷ lệ trung bình của "
+             "giải (người đá nhiều hơn mức đó sẽ bị thổi phồng xG bóng sống).",
+             "official")
+        db.commit()
+        return {"enabled": False, "rows": 0}
+
+    current = db.scalar(select(Season.name).where(Season.is_current.is_(True)))
+    seasons = [s for s in (current, previous_season(current)) if s]
+    if not seasons:
+        _log(db, label, SOURCE_URL, "error", 0, "Chưa biết mùa đang chơi", "official")
+        db.commit()
+        return {"enabled": True, "rows": 0, "errors": ["no current season"]}
+
+    report = fetch_penalties(seasons, provider)
+    if not report.by_season:
+        _log(db, label, SOURCE_URL, "error", 0,
+             report.detail + (" · " + "; ".join(report.errors) if report.errors else ""),
+             "official")
+        db.commit()
+        return {"enabled": True, "rows": 0, "errors": report.errors}
+
+    players = db.scalars(select(Player)).all()
+    by_code = {p.code: p.id for p in players if p.code}
+    now = datetime.now(timezone.utc)
+    existing = {
+        (r.player_id, r.season_name): r
+        for r in db.scalars(
+            select(PlayerPenaltyStat).where(
+                PlayerPenaltyStat.season_name.in_(list(report.by_season))
+            )
+        ).all()
+    }
+    written = 0
+    unmatched: dict[str, int] = {}
+    for season, counts in report.by_season.items():
+        # Người có đá 11m mà không khớp được cầu thủ FPL nào (đã rời giải) — đếm để
+        # báo, không phải lỗi.
+        unmatched[season] = sum(1 for code in counts if code not in by_code)
+        for code, pid in by_code.items():
+            attempts, goals = counts.get(code, (0, 0))
+            row = existing.get((pid, season))
+            if row is None:
+                db.add(PlayerPenaltyStat(
+                    player_id=pid, season_name=season, attempts=attempts, goals=goals,
+                    source_name=_fit(SOURCE_NAME, PlayerPenaltyStat.source_name),
+                    fetched_at=now,
+                ))
+            else:
+                # Khoá duy nhất là (player_id, season_name), không phải khoá chính ->
+                # `db.merge()` sẽ INSERT trùng ở lần chạy thứ hai.
+                row.attempts, row.goals, row.fetched_at = attempts, goals, now
+            written += 1
+
+    detail = report.detail + "".join(
+        f" · {s}: {n} người đá 11m không còn trong danh sách FPL"
+        for s, n in unmatched.items() if n
+    ) + (" · lỗi: " + "; ".join(report.errors) if report.errors else "")
+    _log(db, label, SOURCE_URL, "ok", written, detail, "official")
+    db.commit()
+    return {
+        "enabled": True, "rows": written,
+        "seasons": sorted(report.by_season), "errors": report.errors,
+    }
 PLAYER_ODDS_DOCS = "https://the-odds-api.com/sports-odds-data/betting-markets.html"
 
 
@@ -1212,6 +1302,9 @@ def run_full_sync(db: Session, build_proj: bool = True,
     # Vai trò chiến thuật: phải nằm TRƯỚC build_projections vì engine đọc bảng
     # `player_roles` để ghép cầu thủ với trục điểm yếu của đối thủ.
     result["player_roles"] = sync_player_roles(db)
+    # Phải nằm TRƯỚC build_projections: engine trừ đúng số quả 11m thật khỏi xG
+    # tổng của FPL để ra xG bóng sống.
+    result["player_penalties"] = sync_player_penalties(db)
     result["odds"] = sync_odds(db)
     # Phải nằm TRƯỚC build_projections: engine đọc `player_goal_odds` khi tính lại
     # thành phần ghi bàn của từng trận.

@@ -133,6 +133,12 @@ class Settings(BaseSettings):
     pl_positions_enabled: bool = True
     # Ép dùng một compSeason id cụ thể; để 0 = tự lấy mùa mới nhất từ API.
     pl_positions_season_id: int = 0
+    # Số quả 11m THỰC TẾ từng cầu thủ đã đá (app/providers/pl_penalties.py), cùng
+    # nguồn và cùng điều khoản với vai trò ở trên. FPL chỉ phát xG TỔNG (gồm 11m) và
+    # không có số quả 11m đã đá, nên thiếu nguồn này thì engine chỉ trừ được một tỷ
+    # lệ trung bình — người đá nhiều hơn mức đó bị thổi phồng xG bóng sống. Tắt thì
+    # engine quay về cách trừ theo tỷ lệ cũ, không lỗi gì.
+    pl_penalties_enabled: bool = True
     # Bật phần điều chỉnh theo vị trí. Tắt thì hệ số luôn 1.0 dù có tệp vai trò.
     positional_adjustment_enabled: bool = True
 
@@ -233,7 +239,12 @@ class Settings(BaseSettings):
     #   phần ghi bàn đổi. Không có nguồn nào thì xP giống hệt 0.9.0 — nhưng nhãn vẫn
     #   phải tăng, vì hai bản dự báo cùng nhãn mà khác cách tính sẽ làm trang Model
     #   Performance mất tác dụng.
-    model_version: str = "xp-0.10.0"
+    # 0.11.0 (2026-10-20): xG bóng sống trừ đúng SỐ QUẢ 11m THẬT từng cầu thủ đã đá
+    #   (API Premier League) ở cả mẫu mùa này lẫn nền mùa trước, thay cho trừ một tỷ
+    #   lệ trung bình; tỷ lệ 11m của giải cũng đếm thật thay vì suy từ số quả hỏng.
+    #   Share ghi bàn của Monte Carlo dùng cùng thước đo. Thiếu nguồn thì quay về
+    #   cách cũ.
+    model_version: str = "xp-0.11.0"
 
     @property
     def cors_list(self) -> list[str]:

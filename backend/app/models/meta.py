@@ -376,3 +376,31 @@ class PlayerRole(Base):
     fetched_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
+
+
+# ----------------------------------------- số quả 11m thực tế của cầu thủ ----
+class PlayerPenaltyStat(Base):
+    """Số quả 11m một cầu thủ ĐÃ ĐÁ trong một mùa (`app/providers/pl_penalties.py`).
+
+    FPL phát xG tổng (gồm 11m) mà không phát số quả 11m, nên đây là thứ duy nhất
+    cho phép tính xG bóng sống thật: `xG − 0.79 × attempts`.
+
+    **Có hàng = đã biết.** Mỗi lần lấy thành công một mùa, MỌI cầu thủ được ghi một
+    hàng — kể cả người đá 0 quả. Không có hàng nghĩa là CHƯA BIẾT, và engine quay về
+    cách trừ theo tỷ lệ trung bình; hai trạng thái đó không được lẫn vào nhau.
+    """
+
+    __tablename__ = "player_penalty_stats"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    player_id: Mapped[int] = mapped_column(ForeignKey("players.id"), index=True)
+    season_name: Mapped[str] = mapped_column(String(16), index=True)   # "2026/27"
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    goals: Mapped[int] = mapped_column(Integer, default=0)
+    source_name: Mapped[str] = mapped_column(String(64), default="")
+    fetched_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint("player_id", "season_name", name="uq_player_penalty_season"),
+    )
