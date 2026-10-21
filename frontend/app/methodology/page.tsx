@@ -60,6 +60,19 @@ export default function MethodologyPage() {
               Contribution bên dưới.
             </p>
             <p>
+              <b>Kiến tạo FPL không phải xA.</b> FPL trao kiến tạo rộng hơn Opta (bóng bật ra,
+              cú sút bị cản, kiếm 11m…): 4 mùa liền FPL có <b>0,90–0,95 kiến tạo mỗi bàn</b>,
+              trong khi xA chỉ ~0,63 mỗi xG — tức kiến tạo thật ≈ <b>1,4 × xA</b>. Trước
+              21/10/2026 engine chia kiến tạo theo xA thô nên mọi cầu thủ thiếu ~30% điểm kiến
+              tạo, nặng nhất ở người sáng tạo. Nay xA được quy về thang kiến tạo FPL (tỷ lệ đo
+              tại chỗ), trộn <b>20% số kiến tạo thật</b>, và tổng kiến tạo của đội ={" "}
+              <code>λ × kiến tạo mỗi bàn của giải</code>. Con số 20% đến từ backtest 2 mùa
+              (20 709 lượt cầu thủ-vòng, dự báo vòng N chỉ bằng dữ liệu trước N): giảm sai số
+              2,3%, khoảng tin cậy hoàn toàn về phía cải thiện. Làm y hệt cho <b>bàn thắng</b>{" "}
+              thì không cải thiện gì (−0,07%, khoảng tin cậy chứa 0) — nên bàn thắng vẫn chỉ
+              theo xG: ghi vượt xG trong vài chục trận chủ yếu là may rủi.
+            </p>
+            <p>
               <b>Defensive Contribution là luật ngưỡng, không phải tỷ lệ.</b> Hậu vệ đạt{" "}
               <b>≥ 10</b> hành động (CBIT) được 2 điểm; tiền vệ và tiền đạo cần <b>≥ 12</b>{" "}
               (CBIRT); thủ môn không có. Mô hình tính <code>2 × P(số hành động ≥ ngưỡng)</code>{" "}
@@ -245,7 +258,7 @@ export default function MethodologyPage() {
           <CardContent className="space-y-2 text-sm text-muted-foreground">
             <p>Mô phỏng ở cấp <b>trận đấu của đội</b>: mỗi vòng lặp rút một lần tổng bàn thắng và tổng bàn thua, rồi mới chia cho cầu thủ — sạch lưới dùng chung cho GK + hậu vệ, bàn thắng rút từ chính tổng bàn đó.</p>
             <code className="block rounded bg-muted p-2 text-xs text-foreground">
-              share_goal = (npxG + 11m kỳ vọng) / Σ đội · share_assist = xA cầu thủ / Σ đội
+              share_goal = (npxG + 11m kỳ vọng) / Σ đội · share_assist = (0,8 × 1,4·xA + 0,2 × kiến tạo thật) / Σ đội × kiến tạo mỗi bàn
             </code>
             <p>
               <b>npxG + phần 11m kỳ vọng, không phải xG thô.</b> npxG = xG − 0,79 × số

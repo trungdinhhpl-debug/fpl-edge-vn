@@ -52,6 +52,9 @@ class PlayerPrior:
     # xG BÓNG SỐNG/90 = (xG − 0.79 × số quả 11m thật) / số 90 phút. None = chưa
     # biết số quả 11m của mùa đó -> người dùng prior phải trừ theo tỷ lệ.
     npxg90: float | None = None
+    # Kiến tạo FPL THẬT/90 mùa trước — kiến tạo FPL rộng hơn xA (~1.4 lần), nên
+    # nó là bằng chứng riêng chứ không phải bản sao của xa90.
+    a90: float | None = None
 
 
 def load_priors(db: Session, current_season: str | None,
@@ -91,6 +94,7 @@ def load_priors(db: Session, current_season: str | None,
             # một mẫu số bé vẫn nổ — nên vẫn đòi có phút, chỉ là ngưỡng thấp hơn.
             xg90=(r.expected_goals / mins90) if r.minutes >= 180 else None,
             xa90=(r.expected_assists / mins90) if r.minutes >= 180 else None,
+            a90=(r.assists / mins90) if r.minutes >= 180 else None,
             minutes=r.minutes,
             season=prev,
             npxg90=(

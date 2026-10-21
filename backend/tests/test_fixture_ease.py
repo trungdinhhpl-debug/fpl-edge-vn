@@ -254,6 +254,46 @@ def test_missing_players_reduce_expected_goals():
     assert lam_bad.lam < lam_ok.lam
 
 
+def test_long_term_absentees_who_never_played_are_not_a_loss():
+    """Regression Brighton (2026-10-20): 4/11 người ĐẮT NHẤT chấn thương từ đầu mùa,
+    0 phút, trong khi đội ghi 23 bàn không có họ. Bản cũ lấy 11 người đắt nhất làm
+    đội hình tham chiếu nên nhân λ tấn công 0.64 và λ đối thủ 1.56.
+
+    Đội hình tham chiếu phải là những người đã TẠO RA chỉ số của đội.
+    """
+    teams = [T(1), T(2), T(3)]
+    others = sum((_squad(t) for t in (2, 3)), [])
+    stars_out = [P(190 + i, 1, 3, mins=0, xg=0.0, cost=90, status="i", chance=0)
+                 for i in range(4)]
+    with_stars = TeamStrength(teams, _squad(1) + stars_out + others, [])
+    without = TeamStrength(teams, _squad(1) + others, [])
+    a = with_stars.terms(1, 2, True)[0].lineup
+    b = without.terms(1, 2, True)[0].lineup
+    assert a == pytest.approx(b, abs=1e-9), "trụ cột chưa từng đá không được tính là mất"
+
+
+def test_injured_regular_costs_only_the_gap_to_his_replacement():
+    """Người đá chính vắng thì người kế tiếp vào thay — mất phần CHÊNH, không mất trắng."""
+    teams = [T(1), T(2), T(3)]
+    others = sum((_squad(t) for t in (2, 3)), [])
+    squad = _squad(1)                       # 14 người cùng số phút -> xếp theo giá
+    star = next(p for p in squad if p.element_type == 4)
+    star.now_cost = 120
+    healthy = TeamStrength(teams, squad + others, []).terms(1, 2, True)[0]
+    star.status, star.chance_of_playing_next_round = "i", 0
+    hurt = TeamStrength(teams, squad + others, []).terms(1, 2, True)[0]
+    prices = sorted((p.now_cost / 10.0 for p in squad), reverse=True)
+    usual = sum(prices[:11])
+    replacement = prices[11]                # người thứ 12 vào thay: hậu vệ £5.5
+    # Mức chuẩn hoá theo trung bình giải triệt tiêu trong hiệu số (số hạng so đội tấn
+    # công với đội phòng ngự), nên chênh lệch đúng bằng log của tỷ số thô.
+    assert hurt.lineup - healthy.lineup == pytest.approx(
+        math.log((usual - (12.0 - replacement)) / usual), abs=1e-9
+    )
+    # mất trắng (bản cũ) sẽ là log((usual − 12)/usual) — gần gấp đôi
+    assert hurt.lineup - healthy.lineup > math.log((usual - 12.0) / usual) + 0.05
+
+
 def test_promoted_team_is_capped_at_the_league_average():
     """Đội chưa có phút Ngoại hạng nào không được chấm trên mức trung bình giải."""
     teams = [T(1), T(2)]

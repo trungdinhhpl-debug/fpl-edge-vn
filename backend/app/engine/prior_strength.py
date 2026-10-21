@@ -316,18 +316,27 @@ def _squad_quality(
         def _price(pl) -> float:
             return (getattr(pl, "now_cost", 0) or 0) / 10.0
 
-        attackers = sorted(
-            (p for p in squad if getattr(p, "element_type", 0) in (3, 4)),
-            key=_price, reverse=True,
-        )[:6]
-        gk = sorted(
-            (p for p in squad if getattr(p, "element_type", 0) == 1),
-            key=_price, reverse=True,
-        )[:1]
-        defs = sorted(
-            (p for p in squad if getattr(p, "element_type", 0) == 2),
-            key=_price, reverse=True,
-        )[:4]
+        # Định giá đội hình THỰC SỰ ra sân, không phải những cái tên đắt nhất. Giữa
+        # mùa chọn theo số phút đã đá: người chấn thương từ đầu mùa (0 phút) không
+        # góp gì vào sản lượng của đội nên không được góp vào chỉ số này. Đo được
+        # 2026-10-20: Brighton có Mitoma, Minteh (chấn thương, 0 phút) và Hinshelwood,
+        # David (82 và 23 phút) trong 6 cầu thủ tấn công đắt nhất. Tiền mùa chưa ai có
+        # phút nên vẫn xếp theo giá. Người đã rời CLB ("u") bị loại ở cả hai chế độ.
+        pool = [p for p in squad if (getattr(p, "status", "a") or "a").lower() != "u"]
+        in_season = any((getattr(p, "minutes", 0) or 0) > 0 for p in pool)
+
+        def _order(pl) -> tuple:
+            mins = getattr(pl, "minutes", 0) or 0
+            return (-mins, -_price(pl)) if in_season else (-_price(pl),)
+
+        def _top(types: tuple[int, ...], n: int) -> list:
+            return sorted(
+                (p for p in pool if getattr(p, "element_type", 0) in types), key=_order,
+            )[:n]
+
+        attackers = _top((3, 4), 6)
+        gk = _top((1,), 1)
+        defs = _top((2,), 4)
         att_price[tid] = sum(_price(p) for p in attackers)
         def_price[tid] = sum(_price(p) for p in gk + defs)
 

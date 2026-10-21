@@ -248,7 +248,18 @@ class Settings(BaseSettings):
     #   co giãn ĐO ĐƯỢC 0.95 (140 đội-mùa, 708 quả) — trước là 0.5 đặt tay và so với
     #   trung bình của chính đội, nên người đá 11m của đội yếu được cộng quá tay. Trừ
     #   −2 điểm cho số quả 11m HỎNG kỳ vọng (tỷ lệ vào đo được 81%).
-    model_version: str = "xp-0.12.0"
+    # 0.13.0 (2026-10-20): số hạng đội hình (lineup) lấy đội hình tham chiếu là 11
+    #   người đá nhiều phút nhất mùa này (tiền mùa mới theo giá), và người vắng nhường
+    #   suất cho người kế tiếp. Bản cũ lấy 11 người đắt nhất ở mọi thời điểm: Brighton
+    #   có 4/11 người đắt nhất chấn thương từ đầu mùa (0 phút) nên λ tấn công bị nhân
+    #   0.64 và λ đối thủ 1.56; đội đắt mà khoẻ (Brentford, Arsenal) được cộng oan.
+    #   Cùng nguyên tắc cho thành phần "chất lượng đội hình" của prior đội (theo
+    #   phút, không theo giá) và xếp vai trò theo giá (người chấn thương xếp sau).
+    #   KIẾN TẠO: xA quy về thang kiến tạo FPL (~1.4 lần, đo tại chỗ), trộn 20% kiến
+    #   tạo thật (backtest 2 mùa: −2.3% deviance), và tổng kiến tạo đội = λ × kiến
+    #   tạo mỗi bàn của giải (~0.92) thay vì ≈ 0.63λ. Bàn thắng KHÔNG trộn bàn thật —
+    #   backtest không thấy lợi ích nào.
+    model_version: str = "xp-0.13.0"
 
     @property
     def cors_list(self) -> list[str]:

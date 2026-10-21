@@ -42,6 +42,26 @@ PRIOR_RC90 = {1: 0.0, 2: 0.0, 3: 0.0, 4: 0.0}
 
 SHRINK_MINUTES = 540.0   # ~6 full matches before season data dominates prior
 
+# ---- kiến tạo: xA của Opta KHÔNG phải kiến tạo của FPL ------------------------
+# FPL trao kiến tạo rộng hơn Opta (bóng bật ra, cú sút bị cản, kiếm 11m…), nên tổng
+# kiến tạo FPL cao hơn tổng xA một cách HỆ THỐNG — đo trên toàn giải:
+#   2023/24 1.42 · 2024/25 1.37 · 2025/26 1.38 · 2026/27 (7 vòng) 1.48 kiến tạo/xA,
+#   tức ~0.90–0.95 kiến tạo mỗi bàn, trong khi xA chỉ ~0.63 mỗi xG.
+# Engine cũ chia kiến tạo theo xA rồi chuẩn hoá cùng hệ số với bàn thắng, nên tổng
+# kiến tạo của một đội ra ~0.63λ thay vì ~0.92λ: mọi cầu thủ thiếu ~30% điểm kiến
+# tạo. Hai số dưới đây là MỨC DỰ PHÒNG; engine đo lại tại chỗ từ DB mỗi lần chạy.
+FALLBACK_ASSIST_XA_RATIO = 1.39
+FALLBACK_ASSISTS_PER_GOAL = 0.92
+
+# Trọng số của số kiến tạo THẬT trong tỷ lệ kiến tạo của cầu thủ — ĐO ĐƯỢC.
+# Backtest rolling-origin 2024/25 + 2025/26 (20 709 lượt cầu thủ-vòng, dự báo vòng N
+# chỉ bằng dữ liệu trước N): chỉ hiệu chỉnh xA theo tỷ lệ mùa trước giảm deviance
+# Poisson 1.83%; trộn thêm 20% kiến tạo thật giảm 2.31% (khoảng tin cậy 95% theo cầu
+# thủ hoàn toàn về phía cải thiện), 10%: 2.17%, 30%: 2.28%, 50%: 1.72%.
+# Làm y hệt cho BÀN THẮNG thì không có gì: tốt nhất −0.07% với khoảng tin cậy chứa 0,
+# nên bàn thắng vẫn chỉ theo xG — dứt điểm vượt xG trong vài chục trận là nhiễu.
+ASSIST_ACTUAL_WEIGHT = 0.2
+
 
 @dataclass
 class XPBreakdown:
@@ -193,6 +213,18 @@ def expected_points(
     # True khi `prior_xg90` đã là xG BÓNG SỐNG (đã trừ số quả 11m thật của mùa
     # trước). False = prior là xG tổng, phải trừ theo tỷ lệ.
     prior_xg90_is_open_play: bool = False,
+    # ---- kiến tạo (xem ASSIST_ACTUAL_WEIGHT) ----
+    # Số kiến tạo FPL THẬT trong đúng mẫu của `xa_season`. None = không trộn.
+    assists_season: int | None = None,
+    # Kiến tạo FPL/90 của riêng cầu thủ ở mùa trước. None = suy từ prior xA.
+    prior_a90: float | None = None,
+    # Tỷ lệ kiến tạo FPL / xA của giải, quy xA về thang kiến tạo FPL. 1.0 = không
+    # quy (hành vi cũ, cho lời gọi lẻ không có ngữ cảnh giải).
+    assist_xa_ratio: float = 1.0,
+    assist_actual_weight: float = 0.0,
+    # Hệ số chuẩn hoá để tổng kiến tạo của ĐỘI khớp λ × kiến tạo mỗi bàn của giải.
+    # None = dùng chung `team_goal_scale` như trước.
+    team_assist_scale: float | None = None,
 ) -> XPBreakdown:
     pos = element_type
     rules = RULES
@@ -207,11 +239,17 @@ def expected_points(
     # cả: một tiền đạo 0.7 xG/90 và một tiền đạo 0.15 xG/90 không được phép cùng
     # xuất phát từ 0.35.
     xg90 = _shrink(xg_season / mins90, prior_xg_rate, minutes_season)
-    xa90 = _shrink(
-        xa_season / mins90,
-        PRIOR_XA90.get(pos, 0.1) if prior_xa90 is None else prior_xa90,
-        minutes_season,
-    )
+    # Tỷ lệ kiến tạo theo THANG KIẾN TẠO FPL: xA quy đổi bằng `assist_xa_ratio`, trộn
+    # `assist_actual_weight` phần kiến tạo thật — ở CẢ mẫu mùa này lẫn nền mùa trước,
+    # để hai phía được co về nhau cùng một thước đo.
+    c, w_a = assist_xa_ratio, assist_actual_weight
+    prior_xa_rate = PRIOR_XA90.get(pos, 0.1) if prior_xa90 is None else prior_xa90
+    season_a = c * xa_season / mins90
+    prior_a = c * prior_xa_rate
+    if w_a > 0 and assists_season is not None:
+        season_a = (1 - w_a) * season_a + w_a * assists_season / mins90
+        prior_a = (1 - w_a) * prior_a + w_a * (prior_a if prior_a90 is None else prior_a90)
+    xa90 = _shrink(season_a, prior_a, minutes_season)
     dc90 = _shrink(dc_season / mins90, PRIOR_DC90.get(pos, 4.0), minutes_season)
     # Bốn tỷ lệ này cũng phải co giãn theo cỡ mẫu như ba tỷ lệ trên. Không co giãn
     # thì `tổng_mùa / (phút/90)` nổ ở mẫu bé — xem chú thích ở PRIOR_BPS90.
@@ -291,7 +329,9 @@ def expected_points(
     exp_goals = (
         xg90_open * minutes_frac * fixture_adj + exp_pen_goals
     ) * team_goal_scale
-    exp_assists = xa90 * minutes_frac * fixture_adj * team_goal_scale
+    exp_assists = xa90 * minutes_frac * fixture_adj * (
+        team_goal_scale if team_assist_scale is None else team_assist_scale
+    )
 
     goal_ev = exp_goals * rules.goal_points.get(pos, 4)
     assist_ev = exp_assists * rules.assist_points

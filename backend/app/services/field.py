@@ -65,7 +65,11 @@ def _modelled_eo(db: Session, gw: int) -> dict[int, float]:
         eo[pid] = own                      # mặc định: chỉ có phần sở hữu
         pr = projs.get(pid)
         if pr and pr.xp > 0 and pr.p_start >= MIN_START_PROB:
-            cands.append({"id": pid, "captain_xp": pr.xp * 2, "selected_by_percent": own})
+            # Làm tròn ĐÚNG như trang Đội trưởng (`captains._build_candidates`): hai đầu
+            # vào khác nhau ở chữ số thứ ba đủ đẩy một EO qua mốc làm tròn ,x5, và
+            # cùng một cầu thủ lại mang hai con số ở hai trang.
+            cands.append({"id": pid, "captain_xp": round(pr.xp * 2, 2),
+                          "selected_by_percent": own})
 
     project_effective_ownership(cands)
     for c in cands:

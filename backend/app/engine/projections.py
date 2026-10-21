@@ -140,6 +140,40 @@ def fatigue_factor(days_rest: float | None) -> float:
     return max(FATIGUE_FLOOR, 1.0 - FATIGUE_PER_MISSING_DAY * missing)
 
 
+def league_assist_ratios(
+    db: Session, players: list, stats_season: str | None, prev_season: str | None
+) -> tuple[float, float, str]:
+    """(kiến tạo FPL / xA, kiến tạo FPL mỗi bàn) của giải — đo tại chỗ từ DB.
+
+    Gộp tổng của mẫu đang có trong bảng `players` với mùa trước (`player_season_
+    history`), trừ khi bảng `players` CHÍNH LÀ mùa trước (tiền mùa) — gộp lúc đó là
+    đếm mùa trước hai lần. Dưới 200 bàn thì mẫu quá mỏng, dùng mức dự phòng.
+    """
+    from app.engine.xpoints import FALLBACK_ASSIST_XA_RATIO, FALLBACK_ASSISTS_PER_GOAL
+    from app.models import PlayerSeasonHistory
+
+    a = sum(p.assists or 0 for p in players)
+    xa = sum(p.expected_assists or 0.0 for p in players)
+    g = sum(p.goals_scored or 0 for p in players)
+    if prev_season and stats_season != prev_season:
+        row = db.execute(
+            select(
+                func.sum(PlayerSeasonHistory.assists),
+                func.sum(PlayerSeasonHistory.expected_assists),
+                func.sum(PlayerSeasonHistory.goals_scored),
+            ).where(PlayerSeasonHistory.season_name == prev_season)
+        ).one()
+        a += row[0] or 0
+        xa += row[1] or 0.0
+        g += row[2] or 0
+    if g < 200 or xa <= 0:
+        return (
+            FALLBACK_ASSIST_XA_RATIO, FALLBACK_ASSISTS_PER_GOAL,
+            f"mức dự phòng — mới có {g} bàn trong mẫu",
+        )
+    return a / xa, a / g, f"đo tại chỗ: {a} kiến tạo / {xa:.0f} xA / {g} bàn"
+
+
 def build_projections(
     db: Session,
     horizon: int | None = None,
@@ -252,11 +286,19 @@ def build_projections(
             _previous_season(_scoring.SEASON) or ""
         ),
     )
+    # Kiến tạo FPL rộng hơn xA (~1.4 lần) — quy xA về thang kiến tạo FPL, và tổng
+    # kiến tạo của đội phải khớp λ × kiến tạo mỗi bàn. Xem ASSIST_ACTUAL_WEIGHT.
+    from app.engine.xpoints import ASSIST_ACTUAL_WEIGHT
+
+    assist_c, assists_per_goal, _assist_detail = league_assist_ratios(
+        db, players, stats_from_season, _previous_season(_scoring.SEASON),
+    )
     prior_start: dict[int, float] = {}
     prior_xg: dict[int, float] = {}
     # Cầu thủ mà `prior_xg` đã là xG BÓNG SỐNG (đã trừ 11m thật của mùa trước).
     prior_xg_open: set[int] = set()
     prior_xa: dict[int, float] = {}
+    prior_a: dict[int, float] = {}
     for p in players:
         pri = _priors.get(p.id)
         if pri is None:
@@ -277,6 +319,10 @@ def build_projections(
         prior_xa[p.id] = priors_mod.blended(
             pri.xa90, PRIOR_XA90.get(p.element_type, 0.1), rel
         )
+        if pri.a90 is not None:
+            prior_a[p.id] = priors_mod.blended(
+                pri.a90, assist_c * PRIOR_XA90.get(p.element_type, 0.1), rel
+            )
 
     fx_by_gw = _fixtures_by_gw(fixtures)
     kickoff_of = {f.id: f.kickoff_time for f in fixtures}
@@ -334,8 +380,14 @@ def build_projections(
         for p in squad:
             by_pos[p.element_type].append(p)
         for pos_players in by_pos.values():
-            # giá cao hơn = vai trò dự kiến lớn hơn; hoà giá thì theo ownership
-            pos_players.sort(key=lambda x: (-x.now_cost, -x.selected_by_percent))
+            # giá cao hơn = vai trò dự kiến lớn hơn; hoà giá thì theo ownership. Người
+            # đang chấn thương/treo giò/đã rời đội xếp SAU mọi người ra sân được:
+            # họ không chiếm suất đá chính của ai ở các trận tới.
+            pos_players.sort(key=lambda x: (
+                (x.status or "a").lower() in ("i", "s", "u", "n")
+                and not (x.chance_of_playing_next_round or 0),
+                -x.now_cost, -x.selected_by_percent,
+            ))
             for i, p in enumerate(pos_players):
                 role_rank[p.id] = i
 
@@ -399,7 +451,8 @@ def build_projections(
             lead_taker_on_pitch[_tid] = min(1.0, _e.p_start + _e.p_sub)
 
     def _xp(p, est, lam_for: float, lam_against: float, team_id: int,
-            bonus_override: float | None, team_goal_scale: float = 1.0):
+            bonus_override: float | None, team_goal_scale: float = 1.0,
+            team_assist_scale: float | None = None):
         return expected_points(
             element_type=p.element_type,
             minutes_season=p.minutes,
@@ -430,6 +483,22 @@ def build_projections(
             prior_xa90=prior_xa.get(p.id),
             pen_attempts_season=pen_attempts_sample.get(p.id),
             prior_xg90_is_open_play=p.id in prior_xg_open,
+            assists_season=p.assists,
+            prior_a90=prior_a.get(p.id),
+            assist_xa_ratio=assist_c,
+            assist_actual_weight=ASSIST_ACTUAL_WEIGHT,
+            team_assist_scale=team_assist_scale,
+        )
+
+    def _assist_basis(p) -> float:
+        """Sản lượng kiến tạo cả mùa theo THANG KIẾN TẠO FPL — share kiến tạo của MC.
+
+        Cùng công thức với phần giải tích (xA quy đổi + một phần kiến tạo thật), để
+        ceiling/P(haul) của người kiến tạo nhiều không lệch khỏi chính xP của họ.
+        """
+        return (
+            (1 - ASSIST_ACTUAL_WEIGHT) * assist_c * (p.expected_assists or 0.0)
+            + ASSIST_ACTUAL_WEIGHT * (p.assists or 0)
         )
 
     def _goal_basis(p, team_id: int) -> float:
@@ -540,6 +609,7 @@ def build_projections(
         """
         by_fixture: dict[int, list[bonus_mod.BonusEntry]] = defaultdict(list)
         raw_goals: dict[tuple[int, int], float] = defaultdict(float)
+        raw_assists: dict[tuple[int, int], float] = defaultdict(float)
         sim_xg: dict[tuple[int, int], float] = defaultdict(float)
         sim_xa: dict[tuple[int, int], float] = defaultdict(float)
         lam_of: dict[tuple[int, int], float] = {}
@@ -553,6 +623,7 @@ def build_projections(
                         continue
                     c = _xp(p, est, lam_for, lam_against, team_id, None).components
                     raw_goals[(team_id, fixture_id)] += c["exp_goals"]
+                    raw_assists[(team_id, fixture_id)] += c["exp_assists"]
                     # Mẫu số của share trong Monte Carlo phải là tổng xG của đúng
                     # những người ĐƯỢC MÔ PHỎNG. Dùng tổng cả đội (kể cả người bị
                     # loại vì xMins <= 3) thì các share cộng lại nhỏ hơn 1, và phần
@@ -560,7 +631,7 @@ def build_projections(
                     # nhận 88% mức giải tích dù tổng bàn của đội đã được bảo toàn.
                     if est.xmins > 3:
                         sim_xg[(team_id, fixture_id)] += goal_basis[p.id]
-                        sim_xa[(team_id, fixture_id)] += p.expected_assists or 0.0
+                        sim_xa[(team_id, fixture_id)] += _assist_basis(p)
                     by_fixture[fixture_id].append(bonus_mod.BonusEntry(
                         player_id=p.id,
                         expected_bps=bonus_mod.expected_fixture_bps(
@@ -590,13 +661,23 @@ def build_projections(
             if raw <= 1e-6 or lam <= 0:
                 continue
             scales[key] = max(0.5, min(2.0, lam / raw))
-        return out, scales, dict(sim_xg), dict(sim_xa)
+        # Kiến tạo cũng là đại lượng bảo toàn: tổng của đội = λ × số kiến tạo FPL
+        # mỗi bàn của giải. Trước đây kiến tạo đi chung hệ số với bàn thắng, nên
+        # tổng của đội ra λ × (ΣxA/ΣxG) ≈ 0.63λ thay vì ≈ 0.92λ.
+        a_scales: dict[tuple[int, int], float] = {}
+        for key, raw in raw_assists.items():
+            lam = lam_of.get(key, 0.0)
+            if raw <= 1e-6 or lam <= 0:
+                continue
+            a_scales[key] = max(0.5, min(2.0, lam * assists_per_goal / raw))
+        return out, scales, a_scales, dict(sim_xg), dict(sim_xa)
 
     for gw in gws:
         gw_fx = fx_by_gw.get(gw, {})
         # baseline chỉ cần xP, không cần phân phối — bỏ Monte Carlo cho nhanh
         run_mc = not market_only
-        bonus_by_player_fixture, goal_scales, sim_xg, sim_xa = _allocate_gw_bonus(gw_fx)
+        (bonus_by_player_fixture, goal_scales, assist_scales,
+         sim_xg, sim_xa) = _allocate_gw_bonus(gw_fx)
 
         if market_only:
             # Chỉ tính cho trận CÓ kèo. Trận không có kèo thì TeamStrength rơi về
@@ -613,6 +694,7 @@ def build_projections(
                             p, est, lam_for, lam_against, team.id,
                             bonus_by_player_fixture.get((p.id, fixture_id)),
                             goal_scales.get((team.id, fixture_id), 1.0),
+                            assist_scales.get((team.id, fixture_id)),
                         )
                         key = (p.id, gw)
                         baseline_xp[key] = baseline_xp.get(key, 0.0) + bd.xp
@@ -644,6 +726,9 @@ def build_projections(
                 denom_xg = sim_xg.get(
                     (team.id, fixture_id), team_xg_total[team.id]
                 ) or team_xg_total[team.id]
+                denom_a = sim_xa.get((team.id, fixture_id)) or sum(
+                    _assist_basis(x) for x in squad
+                )
 
                 for p in squad:
                     est = apply_fatigue(_minutes_estimate(p, team.id), fatigue)
@@ -651,6 +736,7 @@ def build_projections(
                         p, est, lam_for, lam_against, team.id,
                         bonus_by_player_fixture.get((p.id, fixture_id)),
                         goal_scales.get((team.id, fixture_id), 1.0),
+                        assist_scales.get((team.id, fixture_id)),
                     )
                     # Thay thành phần ghi bàn (và CHỈ thành phần đó) theo điểm yếu
                     # vị trí + kèo ghi bàn. None = không có nguồn nào -> xP y như cũ.
@@ -729,8 +815,12 @@ def build_projections(
                             if denom_xg > 0.1
                             else 0.0
                         )
+                        # Tổng share kiến tạo của nhóm mô phỏng = số kiến tạo FPL mỗi
+                        # bàn của giải (~0.92), không phải ΣxA/ΣxG (~0.63) như trước.
                         share_assist = (
-                            (p.expected_assists or 0) / max(denom_xg, 0.1)
+                            _assist_basis(p) / denom_a * assists_per_goal
+                            if denom_a > 0.1
+                            else 0.0
                         )
                         threshold = (
                             RULES.defcon_threshold_def

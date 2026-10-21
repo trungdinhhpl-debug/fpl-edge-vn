@@ -103,8 +103,13 @@ CONGESTION_COEF_PER_MATCH = 0.020
 CONGESTION_WINDOW_DAYS = 14
 CONGESTION_FREE_MATCHES = 2      # số trận trong 14 ngày coi là bình thường
 # Đội hình: log(mức sẵn sàng) được nhân hệ số này. 1.0 = mất 10% giá trị đội hình
-# thì mất 10% sản lượng — giả định tuyến tính, cố ý không phóng đại.
+# thì mất 10% sản lượng — giả định tuyến tính, cố ý không phóng đại. "Giá trị mất"
+# là phần chênh giữa người vắng và người vào thay (xem `_availability`).
 LINEUP_ELASTICITY = 1.0
+XI_SIZE = 11
+# Chặn tỷ số sẵn sàng thô: lá chắn cho dữ liệu vô lý (cả đội báo chấn thương, hay
+# dự bị đắt hơn hẳn đội hình chính), không phải ràng buộc thường trực.
+AVAILABILITY_BOUNDS = (0.5, 1.2)
 
 # --- BƯỚC 3 -------------------------------------------------------------------
 # Số trận có giá tối thiểu trước khi cho phép hiệu chuẩn toàn cục. Dưới mức này
@@ -580,14 +585,28 @@ class TeamStrength:
         return out
 
     def _availability(self, players: list, team_ids: list[int]) -> dict[int, float]:
-        """Sức mạnh đội hình = phần giá trị đội hình thật sự sẵn sàng ra sân.
+        """Sức mạnh đội hình = giá trị đội hình CÓ THỂ ra sân / đội hình THƯỜNG đá.
 
         Đây là số hạng "lineup strength" của BƯỚC 2, và là thứ DUY NHẤT trong nhóm
         đó mà FPL API cấp đủ dữ liệu để tính thật: `status` + `chance_of_playing`
         là thông báo chính thức của CLB, cập nhật trước mỗi hạn chuyển nhượng.
 
-        Đội hình dự kiến được xấp xỉ bằng 11 cầu thủ đắt nhất — API không công bố
-        đội hình, và giá là ước lượng công khai tốt nhất về ai sẽ đá.
+        **Đội hình tham chiếu là đội hình đã TẠO RA chỉ số của đội** — 11 người đá
+        nhiều phút nhất mùa này. Tiền mùa (chưa ai có phút) mới rơi về 11 người đắt
+        nhất. Bản cũ dùng 11 người đắt nhất ở MỌI thời điểm và mắc hai lỗi, đo được
+        2026-10-20 trên Brighton (23 bàn, thủng 5 sau 7 trận):
+
+        * 4/11 người đắt nhất (Mitoma, Minteh, Azeez, Tzimas) chấn thương từ đầu mùa,
+          0 phút. Brighton ghi 23 bàn KHÔNG có họ, tức sự vắng mặt đó đã nằm sẵn trong
+          chỉ số của đội — trừ thêm là trừ hai lần. Trong khi những người đá chính
+          thật (De Cuyper £5.3, Vuskovic £5.1, Gomez £5.0) rẻ nên không lọt vào 11.
+        * Người vắng bị tính là MẤT TRẮNG giá trị của mình, không ai vào thay.
+
+        Kết quả: λ tấn công của Brighton bị nhân 0.64 và λ của đối thủ nhân 1.56.
+
+        Giờ người vắng NHƯỜNG SUẤT: đi theo thứ tự "ai thường đá", lấp 11 suất bằng
+        xác suất ra sân của từng người, nên suất của người chấn thương do người kế
+        tiếp đá. Phần mất chỉ còn là chênh lệch giá trị giữa người vắng và người thay.
         """
         by_team: dict[int, list] = {t: [] for t in team_ids}
         for p in players:
@@ -595,29 +614,41 @@ class TeamStrength:
             if tid in by_team:
                 by_team[tid].append(p)
 
+        def _price(p) -> float:
+            return (getattr(p, "now_cost", 0) or 0) / 10.0
+
+        def _p_ok(p) -> float:
+            chance = getattr(p, "chance_of_playing_next_round", None)
+            status = (getattr(p, "status", "a") or "a").lower()
+            if chance is not None:
+                return max(0.0, min(1.0, chance / 100.0))
+            if status == "a":
+                return 1.0
+            if status == "d":
+                return 0.5
+            return 0.0
+
         raw: dict[int, float] = {}
         for tid, squad in by_team.items():
-            xi = sorted(
-                squad, key=lambda p: (getattr(p, "now_cost", 0) or 0), reverse=True
-            )[:11]
-            total = sum((getattr(p, "now_cost", 0) or 0) / 10.0 for p in xi)
-            if total <= 0:
+            in_season = any((getattr(p, "minutes", 0) or 0) > 0 for p in squad)
+            ranked = sorted(
+                squad,
+                key=lambda p: (
+                    (-(getattr(p, "minutes", 0) or 0), -_price(p))
+                    if in_season else (-_price(p),)
+                ),
+            )
+            usual = sum(_price(p) for p in ranked[:XI_SIZE])
+            if usual <= 0:
                 continue
-            live = 0.0
-            for p in xi:
-                price = (getattr(p, "now_cost", 0) or 0) / 10.0
-                chance = getattr(p, "chance_of_playing_next_round", None)
-                status = (getattr(p, "status", "a") or "a").lower()
-                if chance is not None:
-                    p_ok = max(0.0, min(1.0, chance / 100.0))
-                elif status == "a":
-                    p_ok = 1.0
-                elif status == "d":
-                    p_ok = 0.5
-                else:
-                    p_ok = 0.0
-                live += price * p_ok
-            raw[tid] = live / total
+            slots, live = float(XI_SIZE), 0.0
+            for p in ranked:
+                if slots <= 1e-9:
+                    break
+                take = min(_p_ok(p), slots)
+                live += _price(p) * take
+                slots -= take
+            raw[tid] = max(AVAILABILITY_BOUNDS[0], min(AVAILABILITY_BOUNDS[1], live / usual))
 
         if not raw:
             return {t: 1.0 for t in team_ids}
