@@ -258,13 +258,17 @@ export default function MethodologyPage() {
           <CardContent className="space-y-2 text-sm text-muted-foreground">
             <p>Mô phỏng ở cấp <b>trận đấu của đội</b>: mỗi vòng lặp rút một lần tổng bàn thắng và tổng bàn thua, rồi mới chia cho cầu thủ — sạch lưới dùng chung cho GK + hậu vệ, bàn thắng rút từ chính tổng bàn đó.</p>
             <code className="block rounded bg-muted p-2 text-xs text-foreground">
-              share_goal = (npxG + 11m kỳ vọng) / Σ đội · share_assist = (0,8 × 1,4·xA + 0,2 × kiến tạo thật) / Σ đội × kiến tạo mỗi bàn
+              share = bàn (hoặc kiến tạo) kỳ vọng giải tích của trận / (P(ra sân) × λ) → chỉnh để trung bình MC khớp đúng kỳ vọng đó
             </code>
             <p>
-              <b>npxG + phần 11m kỳ vọng, không phải xG thô.</b> npxG = xG − 0,79 × số
-              quả 11m cầu thủ thực sự đã đá; phần 11m kỳ vọng chia theo{" "}
-              <code>penalties_order</code>. Dùng xG thô thì người vừa đá vài quả 11m ôm
-              luôn phần đó vào share, dù quả 11m tới chưa chắc đến lượt anh ta.
+              <b>Share lấy từ chính xP của trận, không từ tổng cả mùa.</b> Tổng cả mùa đã
+              gồm sẵn số phút từng được đá, mà Monte Carlo lại tự rút ai ra sân — dùng nó
+              là tính khả năng ra sân hai lần, và trụ cột ôm phần của người đá luân phiên
+              (bàn thắng MC của nhóm xP &gt; 2,5 từng cao hơn xP 15–34%). Giờ kỳ vọng của
+              trận chia cho xác suất ra sân thành share <i>khi có mặt</i>, rồi vài vòng
+              chỉnh đưa trung bình MC về đúng xP (lệch ≤ 3% theo vị trí). Vì thế npxG,
+              phần 11m theo <code>penalties_order</code> và điều chỉnh vai trò/kèo đi vào
+              phân phối đúng như đi vào xP.
             </p>
             <p>
               Tổng bàn được chia theo <b>Multinomial</b>, nên phần chia ra không bao giờ vượt

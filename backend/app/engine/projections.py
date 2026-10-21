@@ -233,12 +233,6 @@ def build_projections(
         matches_played[f.team_h] += 1
         matches_played[f.team_a] += 1
 
-    # team season expected-assist totals; tổng xG của đội cho share MC được dựng
-    # sau, bằng `_goal_basis`, khi đã biết tỷ lệ 11m
-    team_xa_total: dict[int, float] = defaultdict(float)
-    for p in players:
-        team_xa_total[p.team_id] += p.expected_assists or 0.0
-
     # recent per-GW minutes (optional; present only if detail sync ran)
     recent_minutes: dict[int, list[int]] = defaultdict(list)
     stats = db.scalars(
@@ -490,49 +484,6 @@ def build_projections(
             team_assist_scale=team_assist_scale,
         )
 
-    def _assist_basis(p) -> float:
-        """Sản lượng kiến tạo cả mùa theo THANG KIẾN TẠO FPL — share kiến tạo của MC.
-
-        Cùng công thức với phần giải tích (xA quy đổi + một phần kiến tạo thật), để
-        ceiling/P(haul) của người kiến tạo nhiều không lệch khỏi chính xP của họ.
-        """
-        return (
-            (1 - ASSIST_ACTUAL_WEIGHT) * assist_c * (p.expected_assists or 0.0)
-            + ASSIST_ACTUAL_WEIGHT * (p.assists or 0)
-        )
-
-    def _goal_basis(p, team_id: int) -> float:
-        """Sản lượng ghi bàn cả mùa dùng làm SHARE trong Monte Carlo.
-
-        Phải cùng một thước đo với phần giải tích: khi biết số quả 11m thật thì là
-        xG bóng sống + phần 11m KỲ VỌNG theo `penalties_order` (cùng số phút), chứ
-        không phải xG tổng — nếu không, người đá nhiều 11m vẫn ôm phần bàn của MC
-        như cũ dù xP đã hạ, và trần/P(haul) của anh ta lệch khỏi chính xP của mình.
-        """
-        attempts = pen_attempts_sample.get(p.id)
-        if attempts is None:
-            return p.expected_goals or 0.0
-        pen90 = pen_mod.penalty_xg90(
-            rate_per_team_match=pen_rate.goals_per_team_match,
-            penalties_order=p.penalties_order,
-            lead_taker_on_pitch=lead_taker_on_pitch.get(team_id),
-        )
-        # cùng co giãn theo sức tấn công như phần giải tích (mức trung bình mùa của
-        # đội so với nền giải), để share 11m của đội yếu không lớn hơn xP của nó
-        if ts.baseline > 0.1:
-            pen90 = pen_mod.fixture_scaled_penalty(
-                pen90, 1.0, ts.season_avg_gf(team_id) / ts.baseline
-            )
-        return pen_mod.non_penalty_xg(p.expected_goals, attempts) + pen90 * (
-            (p.minutes or 0) / 90.0
-        )
-
-    goal_basis: dict[int, float] = {p.id: _goal_basis(p, p.team_id) for p in players}
-    # mẫu số dự phòng của share MC — cùng thước đo với tử số
-    team_xg_total: dict[int, float] = defaultdict(float)
-    for p in players:
-        team_xg_total[p.team_id] += goal_basis[p.id]
-
     def _stale_reason(odds) -> str | None:
         """Kèo quá cũ thì CHỈ hiển thị, không vào xP — và nói rõ là vì cũ.
 
@@ -610,8 +561,6 @@ def build_projections(
         by_fixture: dict[int, list[bonus_mod.BonusEntry]] = defaultdict(list)
         raw_goals: dict[tuple[int, int], float] = defaultdict(float)
         raw_assists: dict[tuple[int, int], float] = defaultdict(float)
-        sim_xg: dict[tuple[int, int], float] = defaultdict(float)
-        sim_xa: dict[tuple[int, int], float] = defaultdict(float)
         lam_of: dict[tuple[int, int], float] = {}
         for team_id, fixtures in gw_fx.items():
             for (opp_id, is_home, fixture_id) in fixtures:
@@ -624,14 +573,6 @@ def build_projections(
                     c = _xp(p, est, lam_for, lam_against, team_id, None).components
                     raw_goals[(team_id, fixture_id)] += c["exp_goals"]
                     raw_assists[(team_id, fixture_id)] += c["exp_assists"]
-                    # Mẫu số của share trong Monte Carlo phải là tổng xG của đúng
-                    # những người ĐƯỢC MÔ PHỎNG. Dùng tổng cả đội (kể cả người bị
-                    # loại vì xMins <= 3) thì các share cộng lại nhỏ hơn 1, và phần
-                    # thiếu đó biến thành bàn thắng thất lạc — đo được: tiền đạo chỉ
-                    # nhận 88% mức giải tích dù tổng bàn của đội đã được bảo toàn.
-                    if est.xmins > 3:
-                        sim_xg[(team_id, fixture_id)] += goal_basis[p.id]
-                        sim_xa[(team_id, fixture_id)] += _assist_basis(p)
                     by_fixture[fixture_id].append(bonus_mod.BonusEntry(
                         player_id=p.id,
                         expected_bps=bonus_mod.expected_fixture_bps(
@@ -670,14 +611,13 @@ def build_projections(
             if raw <= 1e-6 or lam <= 0:
                 continue
             a_scales[key] = max(0.5, min(2.0, lam * assists_per_goal / raw))
-        return out, scales, a_scales, dict(sim_xg), dict(sim_xa)
+        return out, scales, a_scales
 
     for gw in gws:
         gw_fx = fx_by_gw.get(gw, {})
         # baseline chỉ cần xP, không cần phân phối — bỏ Monte Carlo cho nhanh
         run_mc = not market_only
-        (bonus_by_player_fixture, goal_scales, assist_scales,
-         sim_xg, sim_xa) = _allocate_gw_bonus(gw_fx)
+        bonus_by_player_fixture, goal_scales, assist_scales = _allocate_gw_bonus(gw_fx)
 
         if market_only:
             # Chỉ tính cho trận CÓ kèo. Trận không có kèo thì TeamStrength rơi về
@@ -721,14 +661,6 @@ def build_projections(
                     fatigue = fatigue_factor(_days_rest(team_fx, fx_index, kickoff_of))
                 lam_for, lam_against = ts.expected_goals(team.id, opp_id, is_home)
                 mc_players: list[MCPlayer] = []
-                # tổng xG của riêng nhóm được mô phỏng (xem chú thích ở pre-pass);
-                # rơi về tổng cả đội nếu pre-pass không có số cho trận này
-                denom_xg = sim_xg.get(
-                    (team.id, fixture_id), team_xg_total[team.id]
-                ) or team_xg_total[team.id]
-                denom_a = sim_xa.get((team.id, fixture_id)) or sum(
-                    _assist_basis(x) for x in squad
-                )
 
                 for p in squad:
                     est = apply_fatigue(_minutes_estimate(p, team.id), fatigue)
@@ -810,18 +742,21 @@ def build_projections(
                     )
 
                     if run_mc and est.xmins > 3:
-                        share_goal = (
-                            goal_basis[p.id] / denom_xg
-                            if denom_xg > 0.1
-                            else 0.0
+                        # Share của MC dựng từ CHÍNH kỳ vọng giải tích của trận này —
+                        # bàn thắng SAU điều chỉnh vai trò/kèo, vì đó là thứ vào xP —
+                        # rồi quy về share KHI CÓ MẶT: Monte Carlo tự rút ai ra sân,
+                        # nên share mà đã gồm sẵn xác suất ra sân sẽ bị nhân nó hai lần.
+                        # Share cũ dựng từ tổng cả mùa và lệch đúng như thế; xem
+                        # montecarlo._calibrated_shares.
+                        exp_goals_fx = (
+                            g_adj.exp_goals_final if g_adj is not None
+                            else bd.components["exp_goals"]
                         )
-                        # Tổng share kiến tạo của nhóm mô phỏng = số kiến tạo FPL mỗi
-                        # bàn của giải (~0.92), không phải ΣxA/ΣxG (~0.63) như trước.
-                        share_assist = (
-                            _assist_basis(p) / denom_a * assists_per_goal
-                            if denom_a > 0.1
-                            else 0.0
-                        )
+                        exp_assists_fx = bd.components["exp_assists"]
+                        p_play = min(1.0, est.p_start + est.p_sub)
+                        on_pitch = p_play * max(lam_for, 0.01)
+                        share_goal = exp_goals_fx / on_pitch if p_play > 0 else 0.0
+                        share_assist = exp_assists_fx / on_pitch if p_play > 0 else 0.0
                         threshold = (
                             RULES.defcon_threshold_def
                             if p.element_type == 2
@@ -845,6 +780,8 @@ def build_projections(
                                 # nó thành tần suất (chia 2) nên cắt ở đây sẽ làm
                                 # nhóm đầu bão hoà, xem engine/montecarlo.py
                                 bonus_base=bd.bonus,
+                                exp_goals=exp_goals_fx,
+                                exp_assists=exp_assists_fx,
                             )
                         )
 

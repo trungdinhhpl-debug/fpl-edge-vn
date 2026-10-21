@@ -14,7 +14,12 @@ Bốn nguyên nhân, và điều đáng nói là **hai bên sai ở hai chỗ kh
   * bảo toàn tổng bàn — GIẢI TÍCH sai: tổng bàn kỳ vọng của cả đội không khớp λ của
     mô hình sức mạnh đội (Chelsea 162%, Fulham 57%);
   * mẫu số của share — MONTE CARLO sai: gồm cả cầu thủ không được mô phỏng, nên tới
-    21% xG của một đội biến thành bàn thắng thất lạc.
+    21% xG của một đội biến thành bàn thắng thất lạc;
+  * share dựng từ TỔNG CẢ MÙA — MONTE CARLO sai: tổng mùa đã nhân sẵn số phút từng
+    được đá, rồi MC nhân thêm xác suất ra sân của trận và dồn phần hụt cho người có
+    mặt. Đo ngày 21/10/2026 (GW8, xP > 2.5, MC/giải tích): bàn thắng hậu vệ 1.34,
+    tiền vệ 1.17, tiền đạo 1.15; kiến tạo 1.24 / 1.15 / 1.08. Giờ share dựng từ kỳ
+    vọng giải tích của chính trận, quy về share khi có mặt, và được chỉnh cho khớp.
 """
 import math
 
@@ -173,3 +178,164 @@ def test_mc_allocates_the_whole_team_goal_total():
     goal_points = sum(c["goals"] for c in col.values())
     goals = goal_points / RULES.goal_points[3]
     assert goals == pytest.approx(lam, rel=0.06), f"chia được {goals:.3f} / {lam}"
+
+
+# ------------------------------------------ share từ kỳ vọng giải tích ---------
+LAM_FOR = 1.7
+# (player_id, vị trí, p_start, p_sub, bàn kỳ vọng, kiến tạo kỳ vọng) của MỘT trận.
+# Có đủ ba kiểu người: trụ cột, dự bị luân phiên, và một chân sút ôm 36% bàn của đội
+# — kiểu người mà chặn "không tự kiến tạo" lấy mất nhiều kiến tạo nhất.
+SQUAD = [
+    (1, 4, 0.95, 0.03, 0.62, 0.20),   # tiền đạo số 1
+    (2, 4, 0.10, 0.45, 0.10, 0.04),   # tiền đạo dự bị
+    (3, 3, 0.90, 0.05, 0.30, 0.40),
+    (4, 3, 0.50, 0.30, 0.12, 0.15),   # tiền vệ luân phiên
+    (5, 3, 0.85, 0.08, 0.15, 0.30),
+    (6, 2, 0.95, 0.01, 0.05, 0.09),
+    (7, 2, 0.92, 0.02, 0.05, 0.09),
+    (8, 2, 0.90, 0.03, 0.05, 0.09),
+    (9, 2, 0.93, 0.02, 0.05, 0.09),
+    (10, 2, 0.30, 0.10, 0.015, 0.03),  # hậu vệ dự bị
+    (11, 1, 0.98, 0.00, 0.0, 0.01),
+]
+
+
+def _analytic_squad(targets: bool = True, scale: float = 1.0) -> list[MCPlayer]:
+    """MCPlayer như projections.py dựng: share KHI CÓ MẶT + kỳ vọng làm đích."""
+    out = []
+    for pid, et, ps, sb, g, a in SQUAD:
+        p_play = min(1.0, ps + sb)
+        out.append(MCPlayer(
+            player_id=pid, element_type=et, p_start=ps, p_sub=sb,
+            p_60_plus=ps * 0.85,
+            share_goal=g * scale / (p_play * LAM_FOR),
+            share_assist=a / (p_play * LAM_FOR),
+            saves90=0.0, dc_hit_prob=0.0, yellow90=0.0, bonus_base=0.0,
+            exp_goals=g * scale if targets else None,
+            exp_assists=a if targets else None,
+        ))
+    return out
+
+
+def _mc_means(players: list[MCPlayer], n: int = 40_000, seed: int = 21):
+    col: dict = {}
+    simulate_fixture(players, LAM_FOR, 1.2, n, np.random.default_rng(seed), collect=col)
+    et = {p.player_id: p.element_type for p in players}
+    goals = {pid: c["goals"] / RULES.goal_points[et[pid]] for pid, c in col.items()
+             if RULES.goal_points.get(et[pid])}
+    assists = {pid: c["assists"] / RULES.assist_points for pid, c in col.items()}
+    return goals, assists
+
+
+def test_share_that_already_includes_availability_is_counted_twice():
+    """Cơ chế của lỗi, giữ lại làm bằng chứng: share VÔ ĐIỀU KIỆN (đã gồm khả năng
+    ra sân — đúng bản chất của share dựng từ tổng cả mùa) bị MC nhân thêm xác suất ra
+    sân rồi dồn phần hụt cho người có mặt. Người đá luân phiên mất phần của mình,
+    trụ cột ôm phần đó."""
+    players = []
+    for p in _analytic_squad(targets=False):
+        p_play = min(1.0, p.p_start + p.p_sub)
+        players.append(MCPlayer(**{
+            **p.__dict__,
+            "share_goal": p.share_goal * p_play,   # = bàn kỳ vọng / λ, vô điều kiện
+            "share_assist": p.share_assist * p_play,
+        }))
+    goals, _ = _mc_means(players)
+    target = {pid: g for pid, _, _, _, g, _ in SQUAD}
+    assert goals[1] / target[1] > 1.04, "trụ cột phải được chia DƯ"
+    assert goals[4] / target[4] < 0.9, "người luân phiên phải bị chia THIẾU"
+    assert goals[2] / target[2] < 0.7, "dự bị gần như mất trắng phần của mình"
+
+
+def test_mc_goals_and_assists_match_their_analytic_targets():
+    """Với đích giải tích, trung bình MC khớp ±3% cho từng người đáng kể và cho
+    từng vị trí — gồm cả người luân phiên và chân sút số 1, người mà chặn tự kiến
+    tạo lấy mất ~36% kiến tạo nếu không chỉnh."""
+    goals, assists = _mc_means(_analytic_squad())
+    for pid, et, _, _, g, a in SQUAD:
+        if g >= 0.1:
+            assert goals[pid] == pytest.approx(g, rel=0.03), f"bàn của {pid}"
+        if a >= 0.1:
+            assert assists[pid] == pytest.approx(a, rel=0.03), f"kiến tạo của {pid}"
+    for pos in (2, 3, 4):
+        ids = [s for s in SQUAD if s[1] == pos]
+        tg, ta = sum(s[4] for s in ids), sum(s[5] for s in ids)
+        assert sum(goals[s[0]] for s in ids) / tg == pytest.approx(1.0, abs=0.03), pos
+        assert sum(assists[s[0]] for s in ids) / ta == pytest.approx(1.0, abs=0.03), pos
+
+
+def test_mc_follows_the_analytic_total_when_it_exceeds_lambda():
+    """Điều chỉnh vai trò/kèo cộng bàn mà không bớt của ai, nên tổng giải tích có thể
+    vượt λ. Chia λ thì không bao giờ khớp được — MC phải rút theo tổng xP ngụ ý."""
+    scale = 1.25 * LAM_FOR / sum(s[4] for s in SQUAD)   # tổng đích = 1.25 λ
+    goals, _ = _mc_means(_analytic_squad(scale=scale))
+    want = sum(s[4] for s in SQUAD) * scale
+    assert sum(goals.values()) == pytest.approx(want, rel=0.03)
+
+
+def test_calibration_keeps_the_share_transfer():
+    """Chỉnh share không được xoá cơ chế chuyển share: khi tiền đạo số 1 không đá
+    chính, người dự bị phải ghi nhiều hơn so với khi anh ta đá chính."""
+    players = _analytic_squad()
+    # không cho vào sân từ ghế, để "không đá chính" đúng nghĩa là vắng mặt
+    players[0] = MCPlayer(**{**players[0].__dict__, "p_sub": 0.0})
+    started: dict = {}
+    out = simulate_fixture(
+        players, LAM_FOR, 1.2, 40_000, np.random.default_rng(4), out_started=started,
+    )
+    understudy = out[2]
+    absent = ~started[1]
+    assert understudy[absent].mean() > understudy[~absent].mean() + 0.15
+
+
+def test_calibrated_shares_never_hand_out_more_than_the_team_scored():
+    """Tổng share mỗi lần rút <= 1 kể cả sau khi chỉnh và khi tổng đích vượt λ — nên
+    chuỗi Binomial có điều kiện không bao giờ chia dư bàn hay kiến tạo."""
+    from app.engine.montecarlo import _calibrated_shares
+
+    n = 20_000
+    rng = np.random.default_rng(6)
+    players = _analytic_squad(scale=1.3)
+    played = {p.player_id: rng.random(n) < min(1.0, p.p_start + p.p_sub) for p in players}
+    lam = sum(p.exp_goals for p in players)
+    eff = _calibrated_shares(
+        players, played, "share_goal", {p.player_id: p.exp_goals for p in players},
+        lam, n, lambda e: {pid: lam * float(x.mean()) for pid, x in e.items()},
+    )
+    assert (sum(eff.values()) <= 1.0 + 1e-9).all()
+
+
+def test_pipeline_mc_matches_the_analytic_per_position(db):
+    """Đầu cuối, qua chính `build_projections`: bàn thắng và kiến tạo của MC khớp
+    phần giải tích ±3% theo từng vị trí, ở nhóm xP > 2.5 — đúng nhóm mà ceiling và
+    P(haul) được đọc ra cho Triple Captain và Bench Boost. Trên bộ demo này, share
+    cũ (tổng cả mùa) cho bàn thắng tiền vệ 1.28, tiền đạo 0.89, kiến tạo hậu vệ 1.11,
+    tiền đạo 1.16. Ba vòng để nhiễu Monte Carlo (~1%) nằm xa ngưỡng."""
+    from collections import defaultdict
+
+    from sqlalchemy import select
+
+    from app.engine.projections import build_projections
+    from app.models import Player, PlayerProjection
+
+    col: dict = {}
+    result = build_projections(db, horizon=3, mc_iterations=6000, collect_components=col)
+    db.flush()
+    et = {p.id: p.element_type for p in db.scalars(select(Player)).all()}
+    rows = db.scalars(
+        select(PlayerProjection).where(PlayerProjection.gameweek.in_(result["gameweeks"]))
+    ).all()
+    agg: dict = defaultdict(lambda: [0.0, 0.0, 0.0, 0.0])
+    for r in rows:
+        c = col.get((r.player_id, r.gameweek))
+        if c is None or r.xp <= 2.5 or et[r.player_id] == 1:
+            continue
+        a = agg[et[r.player_id]]
+        a[0] += c["goals"]
+        a[1] += r.xp_goals
+        a[2] += c["assists"]
+        a[3] += r.xp_assists
+    assert set(agg) == {2, 3, 4}
+    for pos, (mg, ag, ma, aa) in agg.items():
+        assert mg / ag == pytest.approx(1.0, abs=0.03), f"bàn thắng vị trí {pos}"
+        assert ma / aa == pytest.approx(1.0, abs=0.03), f"kiến tạo vị trí {pos}"

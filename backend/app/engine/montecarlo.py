@@ -24,12 +24,18 @@ class MCPlayer:
     p_start: float
     p_sub: float
     p_60_plus: float
-    share_goal: float       # player's share of team goals
+    share_goal: float       # player's share of team goals while on the pitch
     share_assist: float     # player's share of team assists (approx)
     saves90: float
     dc_hit_prob: float      # P(defensive-contribution threshold) if started
     yellow90: float
     bonus_base: float       # expected bonus at full involvement
+    # Kỳ vọng GIẢI TÍCH của chính trận này (số bàn, số kiến tạo), từ
+    # engine/xpoints.py. Có thì hai share ở trên chỉ còn là HÌNH DẠNG xuất phát:
+    # Monte Carlo tự chỉnh share để trung bình của từng người khớp đúng con số này
+    # (xem `_calibrated_shares`). None = dùng share như truyền vào.
+    exp_goals: float | None = None
+    exp_assists: float | None = None
 
 
 # --------------------------------------------------------- xoay tua DGW -----
@@ -53,6 +59,11 @@ MAX_INDIVIDUAL_SHARE = 0.95
 # Ceiling on how far an absent player's share may inflate those who did play.
 MAX_SHARE_TRANSFER = 3.0
 
+# Số vòng chỉnh share về kỳ vọng giải tích (xem `_calibrated_shares`). Xuất phát từ
+# share có điều kiện thì vòng đầu chỉ còn phải sửa vài phần trăm, và mỗi vòng thu
+# hẹp phần còn lại nhiều lần; ba vòng đưa sai số xuống dưới nhiễu của chính phép rút.
+CALIBRATION_ROUNDS = 3
+
 
 def _effective_shares(
     players: list[MCPlayer], played: dict[int, np.ndarray], attr: str, n: int
@@ -66,23 +77,79 @@ def _effective_shares(
     actually took the pitch are scaled back up to the full squad total, which
     hands the absentee's share to his replacements in proportion.
     """
-    full = sum(getattr(p, attr) for p in players)
+    return _scale_to_pitch({p.player_id: getattr(p, attr) for p in players}, played, n)
+
+
+def _scale_to_pitch(
+    shares: dict[int, float], played: dict[int, np.ndarray], n: int
+) -> tuple[dict[int, np.ndarray], float]:
+    """Phần tính của `_effective_shares`, nhận share dưới dạng {player_id: share}."""
+    full = sum(shares.values())
     if full <= 1e-9:
-        return {p.player_id: np.zeros(n) for p in players}, 0.0
+        return {pid: np.zeros(n) for pid in shares}, 0.0
 
     present = np.zeros(n)
-    for p in players:
-        present += getattr(p, attr) * played[p.player_id]
+    for pid, s in shares.items():
+        present += s * played[pid]
     scale = np.where(present > 1e-9, full / np.maximum(present, 1e-9), 0.0)
     scale = np.minimum(scale, MAX_SHARE_TRANSFER)
 
     eff = {
-        p.player_id: np.minimum(
-            getattr(p, attr) * scale * played[p.player_id], MAX_INDIVIDUAL_SHARE
-        )
-        for p in players
+        pid: np.minimum(s * scale * played[pid], MAX_INDIVIDUAL_SHARE)
+        for pid, s in shares.items()
     }
     return eff, full
+
+
+def _calibrated_shares(
+    players: list[MCPlayer],
+    played: dict[int, np.ndarray],
+    attr: str,
+    targets: dict[int, float],
+    lam: float,
+    n: int,
+    measure,
+) -> dict[int, np.ndarray]:
+    """Share theo từng lần mô phỏng, chỉnh sao cho trung bình khớp `targets`.
+
+    Share cũ dựng từ TỔNG CẢ MÙA (xG cả mùa / Σ đội), tức là sản lượng đã nhân sẵn
+    số phút cầu thủ từng được đá. Monte Carlo lại nhân thêm xác suất ra sân của trận
+    này, rồi `_scale_to_pitch` dồn phần hụt cho người có mặt — tức là cho người đá
+    chính. Khả năng ra sân bị tính HAI LẦN: người đá luân phiên mất share, trụ cột
+    ôm phần đó. Đo trên GW8, nhóm xP > 2.5, MC/giải tích: bàn thắng hậu vệ 1.34,
+    tiền vệ 1.17, tiền đạo 1.15; kiến tạo 1.24 / 1.15 / 1.08. Bàn thắng trong một
+    trận là đại lượng bảo toàn nên phần thừa của nhóm đầu là phần thiếu của nhóm
+    đá ít — ceiling và P(haul) của trụ cột bị thổi phồng đúng chỗ Triple Captain và
+    Bench Boost đọc.
+
+    Giờ đích là kỳ vọng giải tích của chính trận này, và share truyền vào là share
+    KHI CÓ MẶT (kỳ vọng ÷ xác suất ra sân). Phần sai lệch còn lại (vài phần trăm, do
+    chuẩn hoá theo từng lần rút, các trần, và chặn tự kiến tạo) được khép bằng vài
+    vòng nhân share với `đích / trung bình đo được` — cơ chế chuyển share của người
+    vắng và chặn tự kiến tạo vẫn giữ nguyên, chỉ đầu vào của chúng được chọn lại.
+
+    `measure(eff)` trả kỳ vọng của từng người dưới `eff`, đo trên chính các lần rút
+    của trận này. Tổng share không vượt 1: không ai được chia nhiều hơn số bàn đội có.
+    """
+    shares = {p.player_id: max(getattr(p, attr), 0.0) for p in players}
+    start = sum(shares.values())
+    full = min(sum(targets.values()) / max(lam, 1e-9), 1.0)
+    if start > 1e-9:
+        shares = {pid: s * full / start for pid, s in shares.items()}
+
+    for _ in range(CALIBRATION_ROUNDS):
+        eff, _ = _scale_to_pitch(shares, played, n)
+        got = measure(eff)
+        for pid, target in targets.items():
+            m = got.get(pid, 0.0)
+            if target <= 0:
+                shares[pid] = 0.0
+            elif m > 1e-12:
+                shares[pid] *= target / m
+        total = sum(shares.values())
+        if total > 1.0:
+            shares = {pid: s / total for pid, s in shares.items()}
+    return _scale_to_pitch(shares, played, n)[0]
 
 
 def _allocate(
@@ -91,6 +158,7 @@ def _allocate(
     order: list[int],
     rng: np.random.Generator,
     cap: dict[int, np.ndarray] | None = None,
+    expected: dict[int, float] | None = None,
 ) -> dict[int, np.ndarray]:
     """Split `totals` among players by drawing conditional binomials in turn.
 
@@ -106,6 +174,11 @@ def _allocate(
     the modelled squad is credited with (own goals, fringe players excluded from
     the simulation) stay unattributed instead of being forced onto the last
     player in the list.
+
+    `expected`, khi truyền vào, nhận trung bình của `số có thể rút × xác suất` cho
+    từng người — kỳ vọng của phép rút khi đã biết trạng thái trước nó. Đó là ước
+    lượng không chệch của trung bình mà ít nhiễu hơn hẳn chính số đã rút, nên dùng
+    được để chỉnh share (xem `_calibrated_shares`).
     """
     remaining = totals.astype(np.int64).copy()
     pool = np.ones(len(remaining))
@@ -115,6 +188,8 @@ def _allocate(
         prob = np.divide(share, pool, out=np.zeros_like(share), where=pool > 1e-9)
         np.clip(prob, 0.0, 1.0, out=prob)
         available = remaining if cap is None else np.minimum(remaining, cap[pid])
+        if expected is not None:
+            expected[pid] = float(np.mean(np.maximum(available, 0) * prob))
         drawn = rng.binomial(np.maximum(available, 0), prob)
         out[pid] = drawn
         remaining -= drawn
@@ -183,8 +258,21 @@ def simulate_fixture(
     theo từng lần mô phỏng để tạo ra xoay tua (xem `rotation_start_prob`); biên
     duyên giữ nguyên nên xP không đổi, chỉ phương sai đổi. `out_started` nhận lại
     mặt nạ của trận này để chuỗi được nối sang trận kế tiếp.
+
+    Khi mọi cầu thủ đều có `exp_goals`/`exp_assists`, share được chỉnh cho trung
+    bình khớp đúng các kỳ vọng đó (xem `_calibrated_shares`).
     """
-    team_goals = rng.poisson(max(lam_for, 0.01), n)
+    calibrate_goals = bool(players) and all(p.exp_goals is not None for p in players)
+    calibrate_assists = bool(players) and all(p.exp_assists is not None for p in players)
+    lam_goals = lam_for
+    if calibrate_goals:
+        # Phần điều chỉnh bàn thắng theo vai trò/kèo (engine/goal_adjust.py) cộng
+        # thêm bàn cho một người mà không bớt của ai, nên tổng kỳ vọng giải tích của
+        # đội có thể vượt λ — đo được tới +3.8% trên GW8. Chia λ thì không thể khớp
+        # một tổng lớn hơn nó, nên đội được rút theo tổng mà chính xP ngụ ý.
+        lam_goals = max(lam_for, sum(p.exp_goals for p in players))
+    lam_goals = max(lam_goals, 0.01)
+    team_goals = rng.poisson(lam_goals, n)
     team_conceded = rng.poisson(max(lam_conceded, 0.01), n)
     clean_sheet = team_conceded == 0
     conceded_penalty = -(team_conceded // 2)
@@ -226,16 +314,43 @@ def simulate_fixture(
 
     # ---- share out the team's goals, then its assists ----
     order = [p.player_id for p in players]
-    goal_eff, _ = _effective_shares(players, played_by, "share_goal", n)
+    if calibrate_goals:
+        # Phép chia bàn là Multinomial và tổng bàn độc lập với việc ai ra sân, nên
+        # kỳ vọng của từng người là `λ × trung bình share` — đo thẳng, không cần
+        # rút. Lấy λ của mô hình chứ không lấy trung bình mẫu của tổng bàn: khớp theo
+        # mẫu thì trần tổng share = 1 bị chạm ở nửa số lần mẫu rút thấp, và bàn thắng
+        # hụt có hệ thống ~0.4%.
+        goal_eff = _calibrated_shares(
+            players, played_by, "share_goal",
+            {p.player_id: p.exp_goals for p in players}, lam_goals, n,
+            lambda eff: {pid: lam_goals * float(np.mean(e)) for pid, e in eff.items()},
+        )
+    else:
+        goal_eff, _ = _effective_shares(players, played_by, "share_goal", n)
     goals_by = _allocate(team_goals, goal_eff, order, rng)
 
     # A player cannot assist his own goal, so each is limited to the goals his
     # team-mates scored. The old draw was independent of the goal draw entirely,
     # which credited the same player with both on 26% of simulated matches.
-    assist_eff, _ = _effective_shares(players, played_by, "share_assist", n)
     assist_cap = {
         pid: np.maximum(team_goals - goals_by[pid], 0) for pid in order
     }
+    if calibrate_assists:
+        # Chặn tự kiến tạo lấy mất của người ghi nhiều bàn đúng phần bàn của chính
+        # họ (tiền đạo ôm 30% bàn của đội thì mất ~30% kiến tạo), nên ở đây không có
+        # công thức đóng: kỳ vọng được đo bằng một lượt chia thử.
+        def _measure_assists(eff):
+            got: dict[int, float] = {}
+            _allocate(team_goals, eff, order, rng, cap=assist_cap, expected=got)
+            return got
+
+        assist_eff = _calibrated_shares(
+            players, played_by, "share_assist",
+            {p.player_id: p.exp_assists for p in players}, lam_goals, n,
+            _measure_assists,
+        )
+    else:
+        assist_eff, _ = _effective_shares(players, played_by, "share_assist", n)
     assists_by = _allocate(team_goals, assist_eff, order, rng, cap=assist_cap)
 
     out: dict[int, np.ndarray] = {}

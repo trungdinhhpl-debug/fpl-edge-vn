@@ -284,6 +284,7 @@ nhau** — nên không có bên nào "đúng" để lấy làm chuẩn:
 | Tần suất bonus | Monte Carlo | giả định trung bình rút là 2, thực tế nhỏ hơn; và cái chặn `min(1, ·)` khiến người kỳ vọng bonus cao không đạt tới |
 | Bảo toàn tổng bàn | giải tích | tổng bàn kỳ vọng của cả đội **không khớp λ** của mô hình sức mạnh đội |
 | Mẫu số của share | Monte Carlo | gồm cả cầu thủ **không được mô phỏng**, nên các share cộng lại < 1 |
+| Share theo tổng cả mùa (0.14.0) | Monte Carlo | tổng mùa đã gồm sẵn số phút từng đá, rồi MC **nhân thêm** xác suất ra sân — khả năng ra sân bị tính hai lần |
 
 Hai chỗ đáng nói riêng:
 
@@ -303,12 +304,61 @@ lạc: **5.9% toàn giải, tới 21% ở Liverpool**. Giờ mẫu số chỉ g�
 **Kết quả:** thủ môn 88→**100%**, hậu vệ 107→**103%**, tiền vệ 92→**99%**, tiền đạo
 79→**91%**. Top-20 theo tổng xP 8 vòng giữ **20/20** người.
 
-**Còn lệch ở đâu, và vì sao dừng.** Tiền đạo còn 91%, do hai nguyên nhân đã xác định
-mà **không** phải lỗi: (1) Monte Carlo không cho một cầu thủ tự kiến tạo cho bàn của
-mình, còn giải tích thì có — ở đây MC đúng; (2) hai bên đánh trọng số phân bổ khác
-nhau (giải tích: per-90 đã shrink × số phút; MC: share xG cả mùa trong nhóm ra sân).
-Khép nốt (2) đòi viết lại cách phân bổ bàn thắng ở một trong hai bên, và chỉnh tiếp
-để một con số đẹp hơn là làm vừa mốc, không phải sửa lỗi.
+**Còn lệch ở đâu (bản 0.4.0).** Tiền đạo còn 91%, do hai nguyên nhân: (1) Monte
+Carlo không cho một cầu thủ tự kiến tạo cho bàn của mình; (2) hai bên đánh trọng số
+phân bổ khác nhau (giải tích: per-90 đã shrink × số phút của trận; MC: share xG cả
+mùa trong nhóm ra sân). Hồi đó (2) được để lại vì tưởng chỉ là khác cách tính.
+
+**Share theo tổng cả mùa — đã khép ở 0.14.0.** (2) hoá ra là lỗi, và lớn hơn nhiều
+so với lúc đầu. Đo ngày 21/10/2026 trên dữ liệu thật (GW8, nhóm xP > 2.5, MC/giải
+tích):
+
+| | Hậu vệ | Tiền vệ | Tiền đạo |
+|---|---|---|---|
+| Bàn thắng, trước | 1.34 | 1.17 | 1.15 |
+| Kiến tạo, trước | 1.24 | 1.15 | 1.08 |
+| Bàn thắng, sau | 1.00 | 1.00 | 1.00 |
+| Kiến tạo, sau | 1.00 | 1.01 | 0.98 |
+
+Cả quần thể thì tiền vệ/tiền đạo ≈ 0.96–0.99: tổng bàn của đội được bảo toàn, nên
+phần thừa của trụ cột chính là phần thiếu của người đá luân phiên. Phân rã bằng phản
+thực (chạy lại MC trên đúng input đã ghi, thay từng phần của share) — bàn thắng hậu
+vệ / tiền vệ / tiền đạo:
+
+| Share của MC | Hậu vệ | Tiền vệ | Tiền đạo |
+|---|---|---|---|
+| tổng cả mùa (cũ) | 1.39 | 1.17 | 1.15 |
+| tỷ lệ mùa này × xMins của trận | 1.29 | 1.14 | 1.12 |
+| ∝ kỳ vọng giải tích của trận | 1.17 | 1.15 | 1.10 |
+| kỳ vọng giải tích **÷ P(ra sân)** | 1.02 | 1.02 | 1.00 |
+
+Bước lớn nhất và chung cho cả ba vị trí là bước cuối: share nào đã gồm sẵn khả năng
+ra sân (tổng cả mùa, hay tỷ lệ × xMins) thì bị MC nhân xác suất ra sân **lần thứ
+hai**, rồi `_scale_to_pitch` dồn phần hụt cho người có mặt — tức cho người đá chính.
+Hai bước giữa là phần riêng của hậu vệ: tỷ lệ mùa này chưa co về nền, và phút cả mùa
+khác xMins của trận.
+
+Sửa: share MC = kỳ vọng giải tích của trận (bàn **sau** điều chỉnh vai trò/kèo, vì
+đó là thứ vào xP) ÷ (P(ra sân) × λ), và kỳ vọng đó được truyền kèm làm **đích**.
+`simulate_fixture` chỉnh share ba vòng (nhân với đích ÷ trung bình đo trên chính các
+lần rút) để khép phần còn lại — chủ yếu là chặn tự kiến tạo, vốn lấy của chân sút ôm
+30% bàn đội khoảng 30% kiến tạo. Ba điều khác:
+
+- tổng kỳ vọng giải tích của đội có thể **vượt λ** (điều chỉnh vai trò/kèo cộng bàn
+  cho một người mà không bớt của ai; tới +3.8% trên GW8), nên đội được rút theo
+  max(λ, Σ đích) — chia λ thì không thể khớp một tổng lớn hơn nó;
+- cơ chế chuyển share của người vắng và chặn tự kiến tạo **giữ nguyên**; chỉ đầu vào
+  của chúng được chọn lại;
+- xP **không đổi một chữ số** (5 344 dòng × 12 cột giải tích, max |Δ| = 0). Trung
+  bình ceiling cả bảng +0.20 nhưng nhóm xP > 2.5 giảm (hậu vệ −0.66, tiền vệ −0.31,
+  tiền đạo −0.50); P(haul) Haaland 24.9% → 19.0%, Mbeumo 34.1% → 28.3%, Palmer 21.7% →
+  15.6%. Người đá luân phiên thì ngược lại (Okafor 1.6% → 6.3%).
+
+**Còn lệch, chưa sửa:** sau khi bàn thắng không còn che, tổng MC/xP của hậu vệ là
+0.98 vì **defcon** MC chỉ đạt 0.87 (hậu vệ) / 0.83 (tiền vệ): xác suất đạt ngưỡng
+tính từ `dc90 × xMins/90` — đã gồm khả năng ra sân — rồi lại chỉ trao khi đá chính,
+và thiếu hệ số theo λ bàn thua. Cứu thua thủ môn 0.91 và thẻ phạt của MC dùng tỷ lệ
+thô chưa co; MC cũng chưa trừ 11m hỏng.
 
 Chế độ chẩn đoán để đo lại: `simulate_fixture(..., collect=dict)` và
 `build_projections(..., collect_components=dict)` trả về trung bình **từng thành
@@ -785,40 +835,44 @@ team_conceded ~ Poisson(λ_against)   # clean sheet dùng chung GK + hậu vệ
 ### Share được tính thế nào
 
 ```
-share_goal   = xG cầu thủ / Σ xG cả đội      (số liệu cả mùa)
-share_assist = xA cầu thủ / Σ xG cả đội
+share_goal   = bàn kỳ vọng giải tích của TRẬN NÀY / (P(ra sân) × λ)    (từ 0.14.0)
+share_assist = kiến tạo kỳ vọng giải tích của TRẬN NÀY / (P(ra sân) × λ)
+→ chỉnh 3 vòng để trung bình MC của từng người = đúng kỳ vọng giải tích
 ```
 
-Là **share theo xG, ĐÃ GỒM penalty** — không phải npxG, cũng không phải shot
-share. Mẫu số của share_assist là tổng **xG** (không phải xA) và điều đó đúng về
-thứ nguyên: phép rút diễn ra trên `team_goals` mà kỳ vọng ≈ xG của đội, nên cầu
-thủ có xA 8 trong đội xG 60 với λ 1.5 tái tạo 7.6 kiến tạo cả mùa. Đổi sang mẫu
-số xA sẽ thổi lên ~10.
+Là **share khi có mặt**, dựng từ chính xP của trận (bàn thắng **sau** điều chỉnh vai
+trò/kèo) — nên npxG, phần 11m theo `penalties_order`, co về nền, độ khó trận và hệ
+số bảo toàn theo λ đều đi vào share đúng như đi vào xP. Chia cho P(ra sân) vì Monte
+Carlo tự rút ai ra sân; share đã gồm sẵn khả năng ra sân sẽ bị nhân nó hai lần.
+Trước 0.14.0 share là `xG cả mùa / Σ xG đội`, và lỗi đó thổi bàn thắng MC của nhóm
+xP > 2.5 lên 15–34% — xem §2b-bis. Cả hai share là phần của **tổng bàn** của đội,
+vì phép rút diễn ra trên `team_goals`.
 
 ### Sáu câu hỏi, sáu câu trả lời thẳng
 
-**1. npxG share hay shot share?** → **xG share, đã gồm penalty.** FPL không công
-bố npxG trong `bootstrap-static`.
+**1. npxG share hay shot share?** → **Không cái nào — share là kỳ vọng giải tích
+của trận** (từ 0.14.0), nên nó dùng đúng thứ xP dùng: npxG co về nền cộng phần 11m
+kỳ vọng.
 
-**2. Penalty tách riêng thế nào?** → **Chưa tách.** FPL cho `penalties_missed`
-nhưng **không** cho `penalties_scored` và **không** cho npxG, nên không có cách
-nào tách phần xG từ chấm 11m ra khỏi tổng xG mà không áp một giả định trung bình
-giải cho mọi người đá 11m — làm thế sẽ hoặc đếm hai lần, hoặc trừ nhầm của người
-mà đội hiếm khi được hưởng phạt đền. Hệ quả còn lại: upside riêng của người đá
-11m vẫn hoà trong share bóng sống. Muốn tách đúng thì cần một nguồn npxG bên
-ngoài.
+**2. Penalty tách riêng thế nào?** → Ở phần giải tích (`xpoints.py`): xG trừ
+0.79 × số quả 11m THẬT đã đá (API Premier League), phần 11m cộng lại theo
+`penalties_order` và co giãn theo sức tấn công. Monte Carlo nhận nguyên kết quả đó
+qua share. MC **chưa** trừ điểm 11m hỏng.
 
 **3. Assist phân phối thế nào?** → Cũng chia theo Multinomial trên `team_goals`,
 nhưng **mỗi người bị chặn trên bởi số bàn do người khác ghi** trong chính vòng
 lặp đó, nên **không ai kiến tạo cho bàn của chính mình**. Tổng kiến tạo cũng
-không vượt tổng bàn.
+không vượt tổng bàn. Chặn đó lấy của người ghi nhiều bàn đúng phần bàn của chính
+họ, nên từ 0.14.0 share kiến tạo được chỉnh bù cho trung bình khớp xP; chặn vẫn
+nguyên.
 
 **4. Cầu thủ không đá thì share chuyển cho ai?** → **Chuyển cho những người
 thực sự ra sân, theo tỷ lệ.** Share của cả đội được chuẩn hoá lại trên tập người
-có mặt trong mỗi vòng lặp (hệ số trần 3.0, mỗi cá nhân trần 0.95). Hệ số điển
-hình là **1.16**, p90 = 1.68, và chỉ **0.69%** số vòng lặp chạm trần. Kết quả đo:
-điểm trung bình của người thay thế tăng **4.41 → 6.80** khi trụ cột rơi từ
-P(start) 95% xuống 5%.
+có mặt trong mỗi vòng lặp (hệ số trần 3.0, mỗi cá nhân trần 0.95). Từ 0.14.0 hệ số
+trung vị là **1.44** (p90 1.85, **0.44%** số vòng lặp chạm trần) — cao hơn bản cũ
+(1.11) chỉ vì share khi có mặt của cả người dự bị nằm trong tổng; độ dao động tương
+đối giữ như cũ (p90/trung vị 1.29 so với 1.30). Kết quả đo ở bản cũ: điểm trung bình
+của người thay thế tăng **4.41 → 6.80** khi trụ cột rơi từ P(start) 95% xuống 5%.
 
 **5. Hai cầu thủ cùng đội tương quan ra sao?** → Tuỳ theo họ *chia sẻ* hay *cạnh
 tranh*:

@@ -259,7 +259,14 @@ class Settings(BaseSettings):
     #   tạo thật (backtest 2 mùa: −2.3% deviance), và tổng kiến tạo đội = λ × kiến
     #   tạo mỗi bàn của giải (~0.92) thay vì ≈ 0.63λ. Bàn thắng KHÔNG trộn bàn thật —
     #   backtest không thấy lợi ích nào.
-    model_version: str = "xp-0.13.0"
+    # 0.14.0 (2026-10-21): share bàn thắng/kiến tạo của Monte Carlo dựng từ KỲ VỌNG
+    #   GIẢI TÍCH của từng trận, quy về share khi có mặt, rồi chỉnh vài vòng cho
+    #   trung bình khớp đúng kỳ vọng đó. Share cũ dựng từ tổng cả mùa, tức đã gồm
+    #   sẵn số phút từng được đá, và MC nhân thêm xác suất ra sân: trụ cột ôm phần
+    #   của người đá luân phiên (GW8, xP > 2.5, bàn MC/giải tích: hậu vệ 1.34, tiền
+    #   vệ 1.17, tiền đạo 1.15; kiến tạo 1.24/1.15/1.08 -> cả sáu về 0.98–1.01).
+    #   xP KHÔNG đổi một chữ số; ceiling, P(haul), phương sai đổi.
+    model_version: str = "xp-0.14.0"
 
     @property
     def cors_list(self) -> list[str]:
