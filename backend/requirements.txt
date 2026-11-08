@@ -15,7 +15,10 @@ tenacity>=9.0               # retry with backoff for external calls
 
 # ---- Modelling / optimization ----
 numpy>=2.1
-pulp>=3.0                   # MILP solver (ships with CBC binary)
+# GHIM <4: PuLP 4.0 (25/09/2026) bỏ CBC đi kèm và xoá luôn pulp.PULP_CBC_CMD →
+# mọi optimizer ném AttributeError (500). Render build lại 21/10 kéo 4.x về là
+# Free Hit / Wildcard / chuyển nhượng chết cùng lúc. 3.3.2 = bản đã test ở máy.
+pulp==3.3.2                 # MILP solver (ships with CBC binary)
 
 # ---- Cache (optional; falls back to in-memory when REDIS_URL unset) ----
 redis>=5.2
